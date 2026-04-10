@@ -8,55 +8,106 @@ function closeMerchantShop() {
 
 function showMerchantShop() {
   gamePaused = true;
-  merchantOptionsContainer.innerHTML = ''; // Clear previous options
+  merchantOptionsContainer.innerHTML = '';
   playUISound('levelUp');
 
-  const options = [];
+  const coinCost = 50 + Math.floor(player.level * 5);
+  const allOptions = [];
 
-  // Option 1: Trade 3 apples for XP
-  const canAffordXp = player.appleCount >= 3;
-  options.push({
-    type: 'xp_for_apples',
-    name: 'Gain Experience',
-    desc: 'A hearty meal to fuel your journey.',
-    icon: '📈',
-    cost: 3,
-    currency: 'apples',
-    xpAmount: player.xpToNextLevel, // Give a full level up's worth
-    enabled: canAffordXp
-  });
-
-  // Options 2 & 3: Buy a random powerup with coins
-  const availablePowerups = [];
-  if (!magneticProjectileActive) availablePowerups.push({ id: 'magnetic_projectile', name: 'Magnetic Shots', icon: '🧲' });
-  if (!explosiveBulletsActive) availablePowerups.push({ id: 'explosive_bullets', name: 'Explosive Bullets', icon: '💥' });
-  if (!ricochetActive) availablePowerups.push({ id: 'ricochet', name: 'Ricochet Shots', icon: '🔄' });
-  if (!player.swordActive) availablePowerups.push({ id: 'sword', name: 'Auto-Sword', icon: '🗡️' });
-  if (!dogCompanionActive && playerData.unlockedPickups.dog_companion) availablePowerups.push({ id: 'dog_companion', name: 'Dog Companion', icon: '🐶' });
-  if (!nightOwlActive && playerData.unlockedPickups.night_owl) availablePowerups.push({ id: 'night_owl', name: 'Night Owl', icon: '🦉' });
-
-  for (let i = availablePowerups.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [availablePowerups[i], availablePowerups[j]] = [availablePowerups[j], availablePowerups[i]];
+  // ── Apple trades ──────────────────────────────────────────────────────────
+  if (player.appleCount >= 3) {
+    allOptions.push({
+      type: 'xp_for_apples', name: 'Gain Experience',
+      desc: 'Trade 3 apples for a full level of XP.', icon: '📈',
+      cost: 3, currency: 'apples', xpAmount: player.xpToNextLevel,
+      enabled: true
+    });
+  }
+  if (player.appleCount >= 2) {
+    allOptions.push({
+      type: 'heal_for_apples', name: 'Restore Health',
+      desc: 'Trade 2 apples to fully heal.', icon: '❤️‍🩹',
+      cost: 2, currency: 'apples', enabled: player.lives < player.maxLives
+    });
   }
 
-  const powerupsToSell = availablePowerups.slice(0, 2);
-  powerupsToSell.forEach((powerup) => {
-    const coinCost = 50 + Math.floor(player.level * 5);
-    options.push({
-      type: 'buy_powerup',
-      name: powerup.name,
-      desc: 'A powerful artifact.',
-      icon: powerup.icon,
-      cost: coinCost,
-      currency: 'coins',
-      powerupId: powerup.id,
-      enabled: player.coins >= coinCost
+  // ── Coin trades ───────────────────────────────────────────────────────────
+  allOptions.push({
+    type: 'xp_for_coins', name: 'Buy Experience',
+    desc: 'Spend coins for a burst of XP.', icon: '⭐',
+    cost: coinCost, currency: 'coins',
+    xpAmount: Math.floor(player.xpToNextLevel * 0.5),
+    enabled: player.coins >= coinCost
+  });
+
+  if (player.lives < player.maxLives) {
+    const healCost = Math.floor(coinCost * 0.8);
+    allOptions.push({
+      type: 'heal_for_coins', name: 'Buy Health',
+      desc: 'Spend coins to restore 1 heart.', icon: '❤️',
+      cost: healCost, currency: 'coins', enabled: player.coins >= healCost
+    });
+  }
+
+  // Temp fire rate boost
+  if (!fireRateBoostActive) {
+    const boostCost = Math.floor(coinCost * 0.6);
+    allOptions.push({
+      type: 'fire_boost', name: 'Fire Rate Boost',
+      desc: 'Double fire rate for 10 seconds.', icon: '🔥',
+      cost: boostCost, currency: 'coins', enabled: player.coins >= boostCost
+    });
+  }
+
+  // ── Powerups ──────────────────────────────────────────────────────────────
+  const powerupPool = [
+    { id: 'magnetic_projectile',  name: 'Magnetic Shots',    icon: '🧲', active: magneticProjectileActive },
+    { id: 'explosive_bullets',    name: 'Explosive Bullets', icon: '💥', active: explosiveBulletsActive },
+    { id: 'ricochet',             name: 'Ricochet Shots',    icon: '🔄', active: ricochetActive },
+    { id: 'sword',                name: 'Auto-Sword',        icon: '🗡️', active: player.swordActive },
+    { id: 'ice_projectile',       name: 'Ice Projectiles',   icon: '❄️', active: iceProjectileActive },
+    { id: 'puddle_trail',         name: 'Slime Trail',       icon: '💧', active: puddleTrailActive },
+    { id: 'auto_aim',             name: 'Auto-Aim',          icon: '🎯', active: autoAimActive },
+    { id: 'dual_gun',             name: 'Dual Gun',          icon: '🔫', active: dualGunActive },
+    { id: 'bomb',                 name: 'Bomb Emitter',      icon: '💣', active: bombEmitterActive },
+    { id: 'orbiter',              name: 'Spinning Orbiter',  icon: '💫', active: orbitingPowerUpActive },
+    { id: 'lightning_projectile', name: 'Lightning Bolt',    icon: '⚡', active: lightningProjectileActive },
+    { id: 'flaming_bullets',      name: 'Flaming Bullets',   icon: '🔥', active: flamingBulletsActive },
+    { id: 'laser_pointer',        name: 'Laser Pointer',     icon: '🔴', active: laserPointerActive },
+    { id: 'v_shape_projectile',   name: 'V-Shape Shots',     icon: '🕊️', active: vShapeProjectileLevel >= 4 },
+    { id: 'dog_companion',        name: 'Dog Companion',     icon: '🐶', active: dogCompanionActive,    locked: !playerData.unlockedPickups.dog_companion },
+    { id: 'night_owl',            name: 'Night Owl',         icon: '🦉', active: nightOwlActive,        locked: !playerData.unlockedPickups.night_owl },
+    { id: 'vengeance_nova',       name: 'Vengeance Nova',    icon: '🛡️', active: vengeanceNovaActive,   locked: !playerData.unlockedPickups.vengeance_nova },
+    { id: 'anti_gravity',         name: 'Anti-Gravity',      icon: '💨', active: antiGravityActive,     locked: !playerData.unlockedPickups.anti_gravity },
+    { id: 'black_hole',           name: 'Black Hole',        icon: '⚫', active: blackHoleActive,       locked: !playerData.unlockedPickups.black_hole },
+    { id: 'whirlwind_axe',        name: 'Whirlwind Axe',     icon: '🪓', active: whirlwindAxeActive,    locked: !playerData.unlockedPickups.whirlwind_axe },
+  ];
+
+  // Shuffle and pick up to 4 available (not already active, not locked)
+  const available = powerupPool.filter(p => !p.active && !p.locked);
+  for (let i = available.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [available[i], available[j]] = [available[j], available[i]];
+  }
+  available.slice(0, 4).forEach(p => {
+    const cost = coinCost + Math.floor(Math.random() * 20) - 10; // slight price variation
+    allOptions.push({
+      type: 'buy_powerup', name: p.name,
+      desc: 'A powerful artifact from the merchant\'s pack.', icon: p.icon,
+      cost, currency: 'coins', powerupId: p.id,
+      enabled: player.coins >= cost
     });
   });
 
-  // Create the cards
-  options.forEach((option) => {
+  // ── Shuffle all options and pick 3 to show ────────────────────────────────
+  for (let i = allOptions.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [allOptions[i], allOptions[j]] = [allOptions[j], allOptions[i]];
+  }
+  const shown = allOptions.slice(0, 3);
+
+  // ── Build cards ───────────────────────────────────────────────────────────
+  shown.forEach((option) => {
     const card = document.createElement('div');
     card.className = 'merchant-card';
     card.innerHTML = `
@@ -86,17 +137,34 @@ function purchaseFromMerchant(option) {
     player.appleCount -= option.cost;
     player.xp += option.xpAmount;
     floatingTexts.push({ text: `+${option.xpAmount} XP!`, x: player.x, y: player.y - player.size, startTime: Date.now(), duration: 1500, color: '#00c6ff' });
-    if (player.xp >= player.xpToNextLevel) {
-      // Delay closing the shop slightly to see the level up screen
-      setTimeout(() => levelUp(), 200);
-    }
+    if (player.xp >= player.xpToNextLevel) { setTimeout(() => levelUp(), 200); }
+  } else if (option.type === 'heal_for_apples') {
+    player.appleCount -= option.cost;
+    player.lives = player.maxLives;
+    updateUIStats();
+    floatingTexts.push({ text: 'Full Heal!', x: player.x, y: player.y - player.size, startTime: Date.now(), duration: 1500, color: '#ff4444' });
+  } else if (option.type === 'xp_for_coins') {
+    player.coins -= option.cost;
+    player.xp += option.xpAmount;
+    floatingTexts.push({ text: `+${option.xpAmount} XP!`, x: player.x, y: player.y - player.size, startTime: Date.now(), duration: 1500, color: '#00c6ff' });
+    if (player.xp >= player.xpToNextLevel) { setTimeout(() => levelUp(), 200); }
+  } else if (option.type === 'heal_for_coins') {
+    player.coins -= option.cost;
+    if (player.lives < player.maxLives) player.lives++;
+    updateUIStats();
+    floatingTexts.push({ text: '+❤️', x: player.x, y: player.y - player.size, startTime: Date.now(), duration: 1500, color: '#ff4444' });
+  } else if (option.type === 'fire_boost') {
+    player.coins -= option.cost;
+    fireRateBoostActive = true;
+    fireRateBoostEndTime = Date.now() + 10000;
+    floatingTexts.push({ text: 'Fire Rate Boost!', x: player.x, y: player.y - player.size, startTime: Date.now(), duration: 1500, color: '#ff8800' });
   } else if (option.type === 'buy_powerup') {
     player.coins -= option.cost;
     activatePowerup(option.powerupId);
     floatingTexts.push({ text: `${option.name}!`, x: player.x, y: player.y - player.size, startTime: Date.now(), duration: 1500 });
   }
 
-  if (option.type !== 'xp_for_apples' || player.xp < player.xpToNextLevel) {
+  if (option.type !== 'xp_for_apples' && option.type !== 'xp_for_coins' || player.xp < player.xpToNextLevel) {
     closeMerchantShop();
   }
 }

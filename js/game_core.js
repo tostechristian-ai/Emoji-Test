@@ -324,7 +324,7 @@
             spinDirection: 0, // For spin animation
 
             upgradeLevels: {
-                speed: 0, fireRate: 0, magnetRadius: 0, damage: 0, projectileSpeed: 0, knockback: 0, luck: 0
+                speed: 0, fireRate: 0, magnetRadius: 0, damage: 0, projectileSpeed: 0, knockback: 0, luck: 0, weaponSize: 0
             }
         };
 
@@ -506,17 +506,19 @@ let doppelganger = null;
         
         const UPGRADE_BORDER_COLORS = {
             "speed": "#66bb6a", "fireRate": "#8B4513", "magnetRadius": "#800080",
-            "damage": "#ff0000", "projectileSpeed": "#007bff", "knockback": "#808080", "luck": "#FFD700"
+            "damage": "#ff0000", "projectileSpeed": "#007bff", "knockback": "#808080", "luck": "#FFD700",
+            "weaponSize": "#FF8C00"
         };
 
         const UPGRADE_OPTIONS = [
-            { name: "Fast Runner", desc: "Increase movement speed by 8%", type: "speed", value: 0.08, icon: '🏃' },
-            { name: "Rapid Fire", desc: "Increase fire rate by 8%", type: "fireRate", value: 0.08, icon: '🔫' },
-            { name: "Magnet Field", desc: "Increase pickup radius by 8%", type: "magnetRadius", value: 0.08, icon: '🧲' },
-            { name: "Increased Damage", desc: "Increase projectile damage by 15%", type: "damage", value: 0.15, icon: '💥' },
-            { name: "Swift Shots", desc: "Increase projectile speed by 8%", type: "projectileSpeed", value: 0.08, icon: '💨' },
-            { name: "Power Shot", desc: "Projectiles knock enemies back by 8%", type: "knockback", value: 0.08, icon: '💪' },
-            { name: "Lucky Charm", desc: "Increase pickup drop rate by 0.5%", type: "luck", value: 0.005, icon: '🍀' }
+            { name: "Fast Runner",       desc: "Increase movement speed by 8%",        type: "speed",          value: 0.08,  icon: '🏃' },
+            { name: "Rapid Fire",        desc: "Increase fire rate by 8%",              type: "fireRate",       value: 0.08,  icon: '🔫' },
+            { name: "Magnet Field",      desc: "Increase pickup radius by 8%",          type: "magnetRadius",   value: 0.08,  icon: '🧲' },
+            { name: "Increased Damage",  desc: "Increase projectile damage by 15%",     type: "damage",         value: 0.15,  icon: '💥' },
+            { name: "Swift Shots",       desc: "Increase projectile speed by 8%",       type: "projectileSpeed",value: 0.08,  icon: '💨' },
+            { name: "Power Shot",        desc: "Projectiles knock enemies back by 8%",  type: "knockback",      value: 0.08,  icon: '💪' },
+            { name: "Lucky Charm",       desc: "Increase pickup drop rate by 0.5%",     type: "luck",           value: 0.005, icon: '🍀' },
+            { name: "Heavy Arsenal",     desc: "Weapons & effects grow 6% larger",      type: "weaponSize",     value: 0.06,  icon: '⚔️' },
         ];
 
         let enemies = [];
@@ -1268,7 +1270,8 @@ document.body.addEventListener('touchstart', (e) => {
         const BOSS_XP_DROP = 20;
         const BOSS_XP_EMOJI = '🎇';
         const BOSS_SPAWN_INTERVAL_LEVELS = 11;
-        const BOSSED_ENEMY_TYPES = ['🧟', SKULL_EMOJI, DEMON_EMOJI, FEMALE_ZOMBIE_EMOJI, BAT_EMOJI, MOSQUITO_EMOJI];
+        // All enemy types can now spawn as bosses
+        const BOSSED_ENEMY_TYPES = Object.keys(ENEMY_CONFIGS);
         let lastBossLevelSpawned = 0;
         function createEnemy(x_pos, y_pos, type) { 
             let x, y, enemyEmoji;
@@ -1398,26 +1401,38 @@ function createBoss() {
                 case 2: x = Math.random() * WORLD_WIDTH; y = WORLD_HEIGHT + spawnOffset; break;
                 case 3: x = -spawnOffset; y = Math.random() * WORLD_HEIGHT; break;
             }
-            const mimickedEmoji = BOSSED_ENEMY_TYPES[Math.floor(Math.random() * BOSSED_ENEMY_TYPES.length)];
+
+            // Only pick enemy types that have unlocked at the current level
+            const eligible = BOSSED_ENEMY_TYPES.filter(e => ENEMY_CONFIGS[e].minLevel <= player.level);
+            const mimickedEmoji = eligible[Math.floor(Math.random() * eligible.length)];
             const config = ENEMY_CONFIGS[mimickedEmoji];
-            let difficultySpeedMultiplier = (currentDifficulty === 'easy') ? 0.9 : (currentDifficulty === 'medium') ? 1.35 : 1.75; 
+
+            let difficultySpeedMultiplier = (currentDifficulty === 'easy') ? 0.9 : (currentDifficulty === 'medium') ? 1.35 : 1.75;
             const currentBaseEnemySpeed = baseEnemySpeed * difficultySpeedMultiplier * (1 + 0.02 * (player.level - 1));
             const bossSpeed = currentBaseEnemySpeed * config.speedMultiplier * 0.75;
-            const bossSize = config.size * 2;
-            const boss = { 
-                x, y, size: bossSize, emoji: mimickedEmoji, speed: bossSpeed, health: BOSS_HEALTH, 
-                isBoss: true, mimics: mimickedEmoji, isHit: false, isHitByOrbiter: false, isHitByCircle: false, 
+
+            // Boss size: 2.5× for small enemies, 1.8× for already-large ones
+            const sizeMultiplier = config.size < 20 ? 2.5 : 2.0;
+            const bossSize = config.size * sizeMultiplier;
+
+            // Boss health scales with level — harder bosses as the run progresses
+            const bossHealth = Math.floor(BOSS_HEALTH + player.level * 1.5);
+
+            const boss = {
+                x, y, size: bossSize, emoji: mimickedEmoji, speed: bossSpeed,
+                health: bossHealth,
+                isBoss: true, mimics: mimickedEmoji, isHit: false, isHitByOrbiter: false, isHitByCircle: false,
                 isFrozen: false, freezeEndTime: 0, originalSpeed: bossSpeed, isSlowedByPuddle: false,
                 isHitByAxe: false, isIgnited: false, ignitionEndTime: 0, lastIgnitionDamageTime: 0
             };
             if (config.initialProps) Object.assign(boss, config.initialProps());
             enemies.push(boss);
-            console.log(`Spawned a boss mimicking ${mimickedEmoji} at level ${player.level}`);
+            floatingTexts.push({ text: '⚠️ BOSS!', x: player.x, y: player.y - 60, startTime: Date.now(), duration: 2000, color: '#ff4444' });
         }
 
         function createPickup(x, y, type, size, xpValue) {
             if (x === -1 || y === -1) { x = Math.random() * WORLD_WIDTH; y = Math.random() * WORLD_HEIGHT; }
-            pickupItems.push({ x, y, size, type, xpValue, glimmerStartTime: Date.now() + Math.random() * 2000 });
+            pickupItems.push({ x, y, size, type, xpValue, spawnTime: Date.now(), glimmerStartTime: Date.now() + Math.random() * 2000 });
         }
         
         function spawnMerchant(x, y) {
@@ -1654,6 +1669,10 @@ if (firstCard) {
             else if (upgrade.type === "projectileSpeed") { player.projectileSpeedMultiplier *= (1 + upgrade.value); } 
             else if (upgrade.type === "knockback") { player.knockbackStrength += upgrade.value; } 
             else if (upgrade.type === "luck") { boxDropChance += upgrade.value; appleDropChance += upgrade.value; }
+            else if (upgrade.type === "weaponSize") {
+                // Cap at 1.5× so weapons never become screen-filling at high levels
+                player.projectileSizeMultiplier = Math.min(1.5, player.projectileSizeMultiplier * (1 + upgrade.value));
+            }
             
             if (player.upgradeLevels.hasOwnProperty(upgrade.type)) { player.upgradeLevels[upgrade.type]++; }
             updateUpgradeStatsUI(); 
@@ -1767,7 +1786,7 @@ if (firstCard) {
             const upgradeNames = {
                 speed: 'SPD', fireRate: 'FR', magnetRadius: 'MAG',
                 damage: 'DMG', projectileSpeed: 'P.SPD', knockback: 'KB',
-                luck: 'LUCK'
+                luck: 'LUCK', weaponSize: 'SIZE'
             };
             for (const [type, level] of Object.entries(player.upgradeLevels)) {
                 if (level > 0) {
@@ -1977,7 +1996,7 @@ async function startGame() {
                 dashCooldown: playerData.hasReducedDashCooldown ? 3000: 6000,
                 isInvincible: false,
                 spinStartTime: null, spinDirection: 0,
-                upgradeLevels: { speed: 0, fireRate: 0, magnetRadius: 0, damage: 0, projectileSpeed: 0, knockback: 0, luck: 0 }
+                upgradeLevels: { speed: 0, fireRate: 0, magnetRadius: 0, damage: 0, projectileSpeed: 0, knockback: 0, luck: 0, weaponSize: 0 }
             });
             player.originalPlayerSpeed = player.speed;
             boxDropChance = BASE_BOX_DROP_CHANCE; appleDropChance = 0.05;

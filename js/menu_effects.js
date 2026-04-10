@@ -75,6 +75,11 @@
   let menuWasVisible = false;
 
   function tick() {
+    // Don't run during active gameplay — zero cost
+    if (typeof gameActive !== 'undefined' && gameActive) {
+      requestAnimationFrame(tick);
+      return;
+    }
     requestAnimationFrame(tick);
 
     // ── Once-screens: build dust the first time they appear ──

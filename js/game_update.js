@@ -50,12 +50,11 @@ for (let i = merchants.length - 1; i >= 0; i--) {
     const currentMerchant = merchants[i];
     const dx = player.x - currentMerchant.x;
     const dy = player.y - currentMerchant.y;
-    const distance = Math.sqrt(dx * dx + dy * dy);
-
-    if (distance < (player.size / 2) + (currentMerchant.size / 2)) {
-        showMerchantShop();      // Open the shop
-        merchants.splice(i, 1); // Remove THIS merchant from the array
-        break;                   // Stop checking for this frame
+    const combinedR = (player.size / 2) + (currentMerchant.size / 2);
+    if (dx * dx + dy * dy < combinedR * combinedR) {
+        showMerchantShop();
+        merchants.splice(i, 1);
+        break;
     }
 }
 
@@ -213,20 +212,24 @@ for (let i = merchants.length - 1; i >= 0; i--) {
             cameraOffsetY = Math.max(0, Math.min(WORLD_HEIGHT - canvas.height, targetCameraY - canvas.height / 2));
             
             if (autoAimActive) {
-                let closestEnemy = null; let minDistanceSq = Infinity;
-                enemies.forEach(enemy => {
-                    if (!enemy.isHit) {
-                        const distSq = (player.x - enemy.x)**2 + (player.y - enemy.y)**2;
-                        if (distSq < minDistanceSq) { minDistanceSq = distSq; closestEnemy = enemy; }
+                // Throttle auto-aim scan to every 3 frames
+                if (update._frame % 3 === 0) {
+                    let closestEnemy = null; let minDistanceSq = Infinity;
+                    for (let ai = 0; ai < enemies.length; ai++) {
+                        const enemy = enemies[ai];
+                        if (!enemy.isHit) {
+                            const distSq = (player.x - enemy.x)**2 + (player.y - enemy.y)**2;
+                            if (distSq < minDistanceSq) { minDistanceSq = distSq; closestEnemy = enemy; }
+                        }
                     }
-                });
-                if (closestEnemy) {
-                    const angle = Math.atan2(closestEnemy.y - player.y, closestEnemy.x - player.x);
-                    player.rotationAngle = angle;
-                    if (angle > -Math.PI / 4 && angle <= Math.PI / 4) player.facing = 'right';
-                    else if (angle > Math.PI / 4 && angle <= 3 * Math.PI / 4) player.facing = 'down';
-                    else if (angle > 3 * Math.PI / 4 || angle <= -3 * Math.PI / 4) player.facing = 'left';
-                    else player.facing = 'up';
+                    if (closestEnemy) {
+                        const angle = Math.atan2(closestEnemy.y - player.y, closestEnemy.x - player.x);
+                        player.rotationAngle = angle;
+                        if (angle > -Math.PI / 4 && angle <= Math.PI / 4) player.facing = 'right';
+                        else if (angle > Math.PI / 4 && angle <= 3 * Math.PI / 4) player.facing = 'down';
+                        else if (angle > 3 * Math.PI / 4 || angle <= -3 * Math.PI / 4) player.facing = 'left';
+                        else player.facing = 'up';
+                    }
                 }
             } else if (aimDx !== 0 || aimDy !== 0) {
                 const angle = Math.atan2(aimDy, aimDx);
@@ -368,9 +371,9 @@ for (let i = merchants.length - 1; i >= 0; i--) {
 
             // Enemy cap: scales with difficulty. Hard allows up to 150, medium 120, easy 80.
             // Also scales slightly with powerups collected to keep challenge proportional.
-            const baseCap = currentDifficulty === 'hard' ? 150 : currentDifficulty === 'medium' ? 120 : 80;
-            const powerupPressure = Math.floor(player.boxPickupsCollectedCount / 3); // +1 enemy per 3 powerups
-            let enemySpawnCap = cheats.noSpawnCap ? Infinity : Math.min(baseCap + powerupPressure, 200);
+            const baseCap = currentDifficulty === 'hard' ? 50 : currentDifficulty === 'medium' ? 40 : 30;
+            const powerupPressure = Math.floor(player.boxPickupsCollectedCount / 5);
+            let enemySpawnCap = cheats.noSpawnCap ? Infinity : Math.min(baseCap + powerupPressure, 80);
 
             // Rain of bullets cheat: drop bullets from sky every second
             if (cheats.rain_of_bullets && !isTimeStopped) {
@@ -425,7 +428,7 @@ for (let i = merchants.length - 1; i >= 0; i--) {
             }
             
             const enemyMovements = new Map();
-            enemies.forEach((enemy) => {
+            enemies.forEach((enemy, enemyIdx) => {
                 if (isTimeStopped) return;
                 if (enemy.isIgnited) {
                     if (now > enemy.ignitionEndTime) { enemy.isIgnited = false; }
@@ -469,7 +472,6 @@ for (let i = merchants.length - 1; i >= 0; i--) {
                 if(cheats.slowEnemies) effectiveEnemySpeed *= 0.5;
 
                 // Throttle puddle checks — only every 3 frames per enemy (staggered by index)
-                const enemyIdx = enemies.indexOf(enemy);
                 enemy.isSlowedByPuddle = enemy.isSlowedByPuddle || false;
                 if ((update._frame + enemyIdx) % 3 === 0) {
                     enemy.isSlowedByPuddle = false;
@@ -538,7 +540,7 @@ for (let i = merchants.length - 1; i >= 0; i--) {
                     case 'vampire':
                         // Throttle dodge detection to every 4 frames
                         if (!enemy._dodgeVX) { enemy._dodgeVX = 0; enemy._dodgeVY = 0; }
-                        if ((update._frame + enemies.indexOf(enemy)) % 4 === 0) {
+                        if ((update._frame + enemyIdx) % 4 === 0) {
                             let dodgeVectorX = 0, dodgeVectorY = 0;
                             for (const weapon of weaponPool) {
                                 if(weapon.active) {
@@ -585,52 +587,50 @@ for (let i = merchants.length - 1; i >= 0; i--) {
                 enemyMovements.set(enemy, {moveX, moveY});
             });
             
-            const separationForce = 1.5;
-            const finalMovements = new Map();
-            enemies.forEach(e1 => {
-                let totalMove = enemyMovements.get(e1);
-                if (!totalMove) return;
+            // Apply movement + obstacle repulsion in one pass — no second Map needed
+            // Repulsion throttled to every 4 frames per enemy (staggered) to cut cost
+            for (let ei = 0; ei < enemies.length; ei++) {
+                const enemy = enemies[ei];
+                const move = enemyMovements.get(enemy);
+                if (!move) continue;
 
-                // This section for pushing away from obstacles (like brick walls) remains.
-                let repulsionX = 0; let repulsionY = 0;
-                destructibles.forEach(obs => {
-                    const dx = e1.x - obs.x;
-                    const dy = e1.y - obs.y;
-                    const distSq = dx*dx + dy*dy;
-                    const repulsionRadius = obs.size/2 + e1.size/2 + 5;
-                    if (distSq < repulsionRadius*repulsionRadius) {
-                        const dist = Math.sqrt(distSq);
-                        const pushForce = (1 - (dist / repulsionRadius)) * 2;
-                        if(dist > 0.1) {
-                            repulsionX += (dx / dist) * pushForce;
-                            repulsionY += (dy / dist) * pushForce;
+                let finalX = move.moveX;
+                let finalY = move.moveY;
+
+                if (destructibles.length > 0 && (update._frame + ei) % 4 === 0) {
+                    let repX = 0, repY = 0;
+                    for (let oi = 0; oi < destructibles.length; oi++) {
+                        const obs = destructibles[oi];
+                        const dx = enemy.x - obs.x;
+                        const dy = enemy.y - obs.y;
+                        const distSq = dx*dx + dy*dy;
+                        const repR = obs.size/2 + enemy.size/2 + 5;
+                        if (distSq < repR*repR && distSq > 0.01) {
+                            const dist = Math.sqrt(distSq);
+                            const force = (1 - dist/repR) * 2;
+                            repX += (dx/dist) * force;
+                            repY += (dy/dist) * force;
                         }
                     }
-                });
-
-                // The calculation for finalX and finalY no longer includes the separation force.
-                finalMovements.set(e1, {
-                    finalX: totalMove.moveX + repulsionX,
-                    finalY: totalMove.moveY + repulsionY
-                });
-            });
-            
-            enemies.forEach(enemy => {
-                const finalMove = finalMovements.get(enemy);
-                if (finalMove) {
-                    let nextX = enemy.x + finalMove.finalX;
-                    let nextY = enemy.y + finalMove.finalY;
-                    let collision = false;
-                    for (const obs of destructibles) {
-                        const dx = nextX - obs.x;
-                        const dy = nextY - obs.y;
-                        if (dx*dx + dy*dy < ((enemy.size / 2) + (obs.size / 2))**2) {
-                            collision = true;
-                            break;
-                        }
-                    }
-                    if (!collision) { enemy.x = nextX; enemy.y = nextY; }
+                    enemy._repX = repX;
+                    enemy._repY = repY;
                 }
+                if (enemy._repX) { finalX += enemy._repX; finalY += enemy._repY; }
+
+                const nextX = enemy.x + finalX;
+                const nextY = enemy.y + finalY;
+                let collision = false;
+                for (let oi = 0; oi < destructibles.length; oi++) {
+                    const obs = destructibles[oi];
+                    const dx = nextX - obs.x;
+                    const dy = nextY - obs.y;
+                    if (dx*dx + dy*dy < ((enemy.size/2) + (obs.size/2))**2) { collision = true; break; }
+                }
+                if (!collision) { enemy.x = nextX; enemy.y = nextY; }
+            }
+
+            // Damage + player collision (kept as forEach for readability)
+            enemies.forEach(enemy => {
 
                 const canGhostDamage = enemy.emoji !== '👻' || (enemy.emoji === '👻' && enemy.isVisible);
                 const combinedRadius = (player.size / 2) + (enemy.size / 2) - 5.6;
@@ -797,6 +797,8 @@ for (let i = merchants.length - 1; i >= 0; i--) {
 
             for (let i = pickupItems.length - 1; i >= 0; i--) {
                 const item = pickupItems[i];
+                // Expire pickups after 30 seconds so they don't pile up forever
+                if (item.spawnTime && now - item.spawnTime > 30000) { pickupItems.splice(i, 1); continue; }
                 const dx = player.x - item.x;
                 const dy = player.y - item.y;
                 const distanceSq = dx*dx + dy*dy;
@@ -931,12 +933,15 @@ if (!cheats.no_gun_mode && !player._isLumberjack && !player._isKnight && (aimDx 
                 if(!weapon.active) continue;
 
                 if (magneticProjectileActive && enemies.length > 0) {
+                    // Use quadtree to find nearby enemies instead of scanning all
+                    const nearby = quadtree.retrieve({ x: weapon.x - 200, y: weapon.y - 200, width: 400, height: 400 });
                     let closestEnemy = null, minDistanceSq = Infinity;
-                    enemies.forEach(enemy => {
-                        if (enemy.isHit || (enemy.isFrozen && now < enemy.freezeEndTime)) return;
-                        const distSq = (weapon.x - enemy.x)**2 + (weapon.y - enemy.y)**2;
-                        if (distSq < minDistanceSq) { minDistanceSq = distSq; closestEnemy = enemy; }
-                    });
+                    for (const obj of nearby) {
+                        const e = obj.ref;
+                        if (!e || !e.health || e.isHit || (e.isFrozen && now < e.freezeEndTime)) continue;
+                        const distSq = (weapon.x - e.x)**2 + (weapon.y - e.y)**2;
+                        if (distSq < minDistanceSq) { minDistanceSq = distSq; closestEnemy = e; }
+                    }
                     if (closestEnemy) {
                         const targetAngle = Math.atan2(closestEnemy.y - weapon.y, closestEnemy.x - weapon.x);
                         let angleDiff = targetAngle - weapon.angle;
@@ -949,7 +954,12 @@ if (!cheats.no_gun_mode && !player._isLumberjack && !player._isKnight && (aimDx 
                 }
                 weapon.x += weapon.dx;
                 weapon.y += weapon.dy;
-                if (now > weapon.lifetime) weapon.active = false;
+                // Deactivate if off world bounds — no point tracking them
+                if (now > weapon.lifetime ||
+                    weapon.x < -50 || weapon.x > WORLD_WIDTH + 50 ||
+                    weapon.y < -50 || weapon.y > WORLD_HEIGHT + 50) {
+                    weapon.active = false;
+                }
             }
 
             for (const weapon of weaponPool) {
@@ -1020,6 +1030,27 @@ if (!cheats.no_gun_mode && !player._isLumberjack && !player._isKnight && (aimDx 
                 enemy.health -= damageToDeal;
                 createBloodSplatter(enemy.x, enemy.y);
                 weapon.hitEnemies.push(enemy);
+
+                // Floating damage number — throttled per enemy, colour/size scales with damage
+                if (!enemy._lastDmgNum || now - enemy._lastDmgNum > 180) {
+                    if (floatingTexts.length < 30) {
+                        const dmg = damageToDeal === Infinity ? 999 : Math.round(damageToDeal * 10) / 10;
+                        const t = Math.min(1, dmg / 5); // 0→1 over 0–5 damage
+                        const fontSize = Math.floor(10 + t * 8); // 10–18px
+                        // White at low damage → bright yellow at high damage
+                        const r = 255;
+                        const g = Math.floor(255 - t * 80); // 255→175
+                        const color = `rgb(${r},${g},50)`;
+                        floatingTexts.push({
+                            text: dmg === 999 ? '💥' : String(dmg),
+                            x: enemy.x + (Math.random() - 0.5) * enemy.size,
+                            y: enemy.y - enemy.size * 0.5,
+                            startTime: now, duration: 600,
+                            color, fontSize
+                        });
+                    }
+                    enemy._lastDmgNum = now;
+                }
 
                 if (explosiveBulletsActive) {
                     const explosionId = Math.random();
@@ -1302,10 +1333,10 @@ for (let i = lightningBolts.length - 1; i >= 0; i--) {
                 if (now - p.spawnTime > p.lifetime) { bloodSplatters.splice(i, 1); continue; }
                 p.x += p.dx; p.y += p.dy; p.dx *= 0.96; p.dy *= 0.96; 
             }
-            // Cap blood arrays to avoid unbounded memory growth
-            if (bloodSplatters.length > 120) bloodSplatters.splice(0, bloodSplatters.length - 120);
+            // Cap blood arrays — tighter limits for better performance
+            if (bloodSplatters.length > 80) bloodSplatters.splice(0, bloodSplatters.length - 80);
             for (let i = bloodPuddles.length - 1; i >= 0; i--) { if (now - bloodPuddles[i].spawnTime > bloodPuddles[i].lifetime) { bloodPuddles.splice(i, 1); } }
-            if (bloodPuddles.length > 60) bloodPuddles.splice(0, bloodPuddles.length - 60);
+            if (bloodPuddles.length > 40) bloodPuddles.splice(0, bloodPuddles.length - 40);
 
             dogHomingShots.forEach(shot => {
                 if (shot.isHoming && enemies.length > 0) {
@@ -1349,7 +1380,10 @@ for (let i = lightningBolts.length - 1; i >= 0; i--) {
             for (let i = flameAreas.length - 1; i >= 0; i--) {
                 const area = flameAreas[i];
                 if (now > area.endTime) { flameAreas.splice(i, 1); continue; }
-                enemies.forEach(enemy => {
+                // Throttle ignition checks to every 6 frames
+                if (update._frame % 6 !== 0) continue;
+                for (let ei = 0; ei < enemies.length; ei++) {
+                    const enemy = enemies[ei];
                     const dx = enemy.x - area.x;
                     const dy = enemy.y - area.y;
                     if (!enemy.isHit && (dx*dx + dy*dy) < area.radius*area.radius) {
@@ -1359,7 +1393,7 @@ for (let i = lightningBolts.length - 1; i >= 0; i--) {
                             enemy.lastIgnitionDamageTime = now;
                         }
                     }
-                });
+                }
             }
 
              for (let i = flies.length - 1; i >= 0; i--) {

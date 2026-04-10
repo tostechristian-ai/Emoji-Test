@@ -222,8 +222,8 @@
                 if (enemy.emoji === '👻') {
                     ctx.globalAlpha = enemy.isVisible ? 1.0 : 0.2;
                 }
-                if (enemy.isFrozen) ctx.filter = 'saturate(0.5) brightness(1.5) hue-rotate(180deg)';
-                if (enemy.isSlowedByPuddle) ctx.filter = 'saturate(2) brightness(0.8)';
+                // Frozen: blue tint via globalAlpha overlay instead of ctx.filter
+                if (enemy.isFrozen) ctx.globalAlpha = (ctx.globalAlpha || 1) * 0.7;
                 
                 const emojiToDraw = enemy.isBoss ? enemy.mimics : enemy.emoji;
                 const preRenderedImage = preRenderedEntities[emojiToDraw];
@@ -237,6 +237,26 @@
                     ctx.fillText('🔥', enemy.x, enemy.y + (enemy.bobOffset || 0));
                 }
                 ctx.restore();
+
+                // Boss health bar
+                if (enemy.isBoss) {
+                    const maxHp = Math.floor(20 + (player.level || 1) * 1.5);
+                    const hpRatio = Math.max(0, enemy.health / maxHp);
+                    const barW = enemy.size * 1.2;
+                    const barH = 5;
+                    const barX = enemy.x - barW / 2;
+                    const barY = enemy.y + enemy.size / 2 + 6 + (enemy.bobOffset || 0);
+                    ctx.fillStyle = '#222';
+                    ctx.fillRect(barX, barY, barW, barH);
+                    // Colour shifts green → orange → red as health drops
+                    const r = Math.floor(255 * (1 - hpRatio));
+                    const g = Math.floor(200 * hpRatio);
+                    ctx.fillStyle = `rgb(${r},${g},0)`;
+                    ctx.fillRect(barX, barY, barW * hpRatio, barH);
+                    ctx.strokeStyle = '#000';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(barX, barY, barW, barH);
+                }
             });
 
             explosions.forEach(explosion => {
@@ -282,12 +302,7 @@
                     weapon._boneSpin = ((weapon._boneSpin || weapon.angle) + 0.25);
                     ctx.rotate(weapon._boneSpin);
                     const bonePre = preRenderedEntities && preRenderedEntities['🦴'];
-                    if (bonePre) {
-                        ctx.drawImage(bonePre, -10, -10, 20, 20);
-                    } else {
-                        ctx.font = '16px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                        ctx.fillText('🦴', 0, 0);
-                    }
+                    if (bonePre) { ctx.drawImage(bonePre, -10, -10, 20, 20); }
                     ctx.restore();
                     continue;
                 }
@@ -296,43 +311,19 @@
                     weapon._axeSpin = ((weapon._axeSpin || weapon.angle) + 0.3);
                     ctx.rotate(weapon._axeSpin);
                     const axePre = preRenderedEntities && preRenderedEntities['🪓'];
-                    if (axePre) {
-                        ctx.drawImage(axePre, -11, -11, 22, 22);
-                    } else {
-                        ctx.font = '18px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                        ctx.fillText('🪓', 0, 0);
-                    }
+                    if (axePre) { ctx.drawImage(axePre, -11, -11, 22, 22); }
                     ctx.restore();
                     continue;
                 }
                 ctx.rotate(weapon.angle);
-                ctx.shadowBlur = 8;
-                if (cheats.rainbow_bullets) {
-                    const hue = (Date.now() / 5 + weapon.x + weapon.y) % 360;
-                    ctx.shadowColor = `hsl(${hue},100%,70%)`;
-                    ctx.filter = `hue-rotate(${hue}deg) saturate(3) brightness(2)`;
-                } else if (fireRateBoostActive) {
-                    ctx.shadowColor = '#ff3333';
-                    ctx.filter = 'hue-rotate(330deg) saturate(6) brightness(2.2)';
-                } else if (flamingBulletsActive) {
-                    ctx.shadowColor = '#ff8800';
-                    ctx.filter = 'hue-rotate(30deg) saturate(5) brightness(2)';
-                } else if (magneticProjectileActive && iceProjectileActive) {
-                    ctx.shadowColor = '#aa44ff';
-                    ctx.filter = 'hue-rotate(270deg) saturate(2) brightness(2)';
-                } else if (magneticProjectileActive) {
-                    ctx.shadowColor = '#ff6600';
-                    ctx.filter = 'brightness(2) saturate(5)';
-                } else if (iceProjectileActive) {
-                    ctx.shadowColor = '#44aaff';
-                    ctx.filter = 'hue-rotate(180deg) saturate(2) brightness(2)';
-                } else {
-                    const pulse = 0.7 + Math.sin(now / 120) * 0.3;
-                    ctx.shadowColor = '#ffffff';
-                    ctx.shadowBlur = 8 + pulse * 6;
-                    ctx.filter = `brightness(${2 + pulse * 0.5}) drop-shadow(0px 0px 3px #fff)`;
-                }
-                ctx.drawImage(sprites.bullet, -weapon.size / 2, -weapon.size / 2, weapon.size, weapon.size * 0.5);
+                const bSize = weapon.size * 1.4;
+                const bH = bSize * 0.5;
+                // Yellow tint always, red when fire rate boost active
+                ctx.globalAlpha = fireRateBoostActive ? 0.3 : 0.08;
+                ctx.fillStyle = fireRateBoostActive ? '#ff3300' : '#ffee44';
+                ctx.fillRect(-bSize / 2, -bH / 2, bSize, bH);
+                ctx.globalAlpha = 1;
+                ctx.drawImage(sprites.bullet, -bSize / 2, -bH / 2, bSize, bH);
                 ctx.restore();
             }
 
@@ -340,7 +331,11 @@
                 ctx.save();
                 ctx.translate(shot.x, shot.y);
                 ctx.rotate(shot.angle);
-                ctx.filter = 'hue-rotate(0deg) saturate(5) brightness(1.5)';
+                // No filter — draw a small orange circle tint instead
+                ctx.globalAlpha = 0.6;
+                ctx.fillStyle = '#ff8800';
+                ctx.beginPath(); ctx.arc(0, 0, shot.size * 0.4, 0, Math.PI * 2); ctx.fill();
+                ctx.globalAlpha = 1;
                 ctx.drawImage(sprites.bullet, -shot.size / 2, -shot.size / 2, shot.size, shot.size * 0.5);
                 ctx.restore();
             });
@@ -386,19 +381,20 @@
                 } else {
                     const preRendered = preRenderedEntities[item.type];
                     if (preRendered) {
-                        // XP gems — larger + blue glow so they stand out
+                        // XP gems — larger + blue tint circle (no ctx.filter on mobile)
                         const isXp = item.type !== '📦';
                         const scale = isXp ? 1.5 : 1;
                         const w = preRendered.width * scale;
                         const h = preRendered.height * scale;
-                        ctx.save();
                         if (isXp) {
-                            ctx.filter = 'hue-rotate(200deg) brightness(2) saturate(3) drop-shadow(0px 0px 5px #44aaff)';
-                            ctx.shadowColor = '#44aaff';
-                            ctx.shadowBlur = 8;
+                            // Cheap blue glow: draw a circle behind the gem
+                            ctx.save();
+                            ctx.globalAlpha = 0.5;
+                            ctx.fillStyle = '#44aaff';
+                            ctx.beginPath(); ctx.arc(item.x, item.y, w * 0.6, 0, Math.PI * 2); ctx.fill();
+                            ctx.restore();
                         }
                         ctx.drawImage(preRendered, item.x - w / 2, item.y - h / 2, w, h);
-                        ctx.restore();
                     }
                 }
             });
@@ -564,7 +560,7 @@
             
             if (doppelganger) {
                 ctx.save();
-                ctx.globalAlpha = 0.6; ctx.filter = 'hue-rotate(180deg)';
+                ctx.globalAlpha = 0.6;
                 ctx.drawImage(playerSprite, doppelganger.x - doppelganger.size / 2, doppelganger.y - doppelganger.size / 2, doppelganger.size, doppelganger.size);
                 const gunWidth = doppelganger.size * 0.8; const gunHeight = gunWidth * (sprites.gun.height / sprites.gun.width);
                 const gunXOffset = doppelganger.size / 4; const gunYOffset = -gunHeight / 2;
@@ -700,13 +696,19 @@
             floatingTexts.forEach(ft => {
                 const elapsed = now - ft.startTime;
                 const alpha = 1.0 - (elapsed / ft.duration);
-                const yOffset = (elapsed / ft.duration) * 20; 
+                const yOffset = (elapsed / ft.duration) * 20;
                 ctx.save();
                 ctx.globalAlpha = Math.max(0, alpha);
-                ctx.font = 'bold 14px "Press Start 2P"';
+                // Damage numbers use a smaller plain font; other texts use the game font
+                if (ft.fontSize) {
+                    ctx.font = `bold ${ft.fontSize}px sans-serif`;
+                    ctx.lineWidth = 2;
+                } else {
+                    ctx.font = 'bold 14px "Press Start 2P"';
+                    ctx.lineWidth = 3;
+                }
                 ctx.fillStyle = ft.color || '#FFFFFF';
                 ctx.strokeStyle = '#000000';
-                ctx.lineWidth = 3;
                 ctx.textAlign = 'center';
                 ctx.strokeText(ft.text, ft.x, ft.y - yOffset);
                 ctx.fillText(ft.text, ft.x, ft.y - yOffset);
@@ -751,11 +753,17 @@
             }
 
             if (isMouseInCanvas && gameActive && sprites.crosshair) {
-                const reticleSize = 22;
+                const reticleSize = 24;
                 ctx.save();
-                ctx.shadowColor = '#00ffff';
-                ctx.shadowBlur = 10;
-                ctx.filter = 'brightness(3) saturate(0) invert(1) drop-shadow(0 0 3px #00ffff)';
+                // Orange-red circle glow behind the crosshair sprite
+                ctx.globalAlpha = 0.4;
+                ctx.fillStyle = '#ff5500';
+                ctx.beginPath();
+                ctx.arc(mouseX, mouseY, reticleSize / 2, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+                ctx.shadowColor = '#ff5500';
+                ctx.shadowBlur = 12;
                 ctx.drawImage(sprites.crosshair, mouseX - reticleSize / 2, mouseY - reticleSize / 2, reticleSize, reticleSize);
                 ctx.restore();
             }
