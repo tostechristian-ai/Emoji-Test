@@ -599,202 +599,333 @@ window.addEventListener("gamepaddisconnected", (e) => {
   if (gamepadIndex === e.gamepad.index) gamepadIndex = null;
 });
 
-// Call each frame
-function handleGamepadInput() {
-    if (gamepadIndex == null) return;
-    const gp = navigator.getGamepads?.()[gamepadIndex];
-    if (!gp) return;
-
-    // --- NEW UPGRADE MENU GAMEPAD LOGIC ---
-    // Place this before all other gamepad logic
-    if (isGamepadUpgradeMode) {
-        const now = Date.now();
-        if (now - lastGamepadUpdate > GAMEPAD_INPUT_DELAY) {
-            let moved = false;
-            const prevIndex = selectedUpgradeIndex;
-            const numOptions = document.querySelectorAll('.upgrade-card').length;
-            
-            // Check for horizontal movement (D-pad left/right or left stick)
-            if (gp.buttons[15].pressed || gp.axes[0] > 0.5) {
-                selectedUpgradeIndex = (selectedUpgradeIndex + 1) % numOptions;
-                moved = true;
-            } 
-            else if (gp.buttons[14].pressed || gp.axes[0] < -0.5) {
-                selectedUpgradeIndex = (selectedUpgradeIndex - 1 + numOptions) % numOptions;
-                moved = true;
-            }
-            
-            // Check for vertical movement (D-pad up/down)
-            const cardsPerRow = 3; 
-            if (gp.buttons[12].pressed) {
-                selectedUpgradeIndex = Math.max(0, selectedUpgradeIndex - cardsPerRow);
-                moved = true;
-            } else if (gp.buttons[13].pressed) {
-                selectedUpgradeIndex = Math.min(numOptions - 1, selectedUpgradeIndex + cardsPerRow);
-                moved = true;
-            }
-
-            if (moved && prevIndex !== selectedUpgradeIndex) {
-                const prevCard = document.querySelectorAll('.upgrade-card')[prevIndex];
-                if (prevCard) {
-                    prevCard.classList.remove('selected');
-                }
-                const newCard = document.querySelectorAll('.upgrade-card')[selectedUpgradeIndex];
-                if (newCard) {
-                    newCard.classList.add('selected');
-                    playUISound('uiClick');
-                    vibrate(10);
-                }
-                lastGamepadUpdate = now;
-            }
-            
-            // Check for confirmation button (e.g., A/X button)
-            if (gp.buttons[0].pressed) {
-                const selectedCard = document.querySelectorAll('.upgrade-card')[selectedUpgradeIndex];
-                if (selectedCard) {
-                    selectedCard.querySelector('button').click();
-                    isGamepadUpgradeMode = false;
-                    lastGamepadUpdate = now;
-                    return;
-                }
-            }
-        }
-    }
-
-    // --- EXISTING GAMEPAD MOVEMENT LOGIC ---
-    let lx = applyDeadzone(gp.axes[0] || 0);
-    let ly = applyDeadzone(gp.axes[1] || 0);
-    const lmag = Math.hypot(lx, ly);
-    if (lmag > 0) {
-        joystickDirX = lx / lmag;
-        joystickDirY = ly / lmag;
-    } else {
-        joystickDirX = 0;
-        joystickDirY = 0;
-    }
-    
-    let rx = applyDeadzone(gp.axes[2] || 0);
-    let ry = applyDeadzone(gp.axes[3] || 0);
-    const rmag = Math.hypot(rx, ry);
-    if (rmag > 0) {
-        aimDx = rx / rmag;
-        aimDy = ry / rmag;
-    } else {
-        aimDx = 0;
-        aimDy = 0;
-    }
-
-    const pressed = (i) => !!gp.buttons?.[i]?.pressed;
-    if (pressed(7) && !gp._rTriggerLatch) {
-    gp._rTriggerLatch = true;
-    triggerDash(player);
-} else if (!pressed(7)) gp._rTriggerLatch = false;
-    
-    if ((pressed(9) || pressed(1)) && !gp._pauseLatch) {
-        gp._pauseLatch = true;
-        if (gameActive && !gameOver) togglePause();
-    } else if (!pressed(9) && !pressed(1)) gp._pauseLatch = false;
-}
-
+// Call each frame — single definition, handles menu + in-game
 let isGamepadUpgradeMode = false;
 let selectedUpgradeIndex = 0;
 let lastGamepadUpdate = 0;
-const GAMEPAD_INPUT_DELAY = 200; // milliseconds
+const GAMEPAD_INPUT_DELAY = 200;
+
+// Persistent gamepad navigation state (lives outside the snapshot object)
+const _gpNav = { menuIndex: 0, lastScreen: '' };
 
 function handleGamepadInput() {
     if (gamepadIndex == null) return;
     const gp = navigator.getGamepads?.()[gamepadIndex];
     if (!gp) return;
 
-    // --- NEW UPGRADE MENU GAMEPAD LOGIC ---
-    if (isGamepadUpgradeMode) {
-        const now = Date.now();
-        if (now - lastGamepadUpdate > GAMEPAD_INPUT_DELAY) {
-            let moved = false;
-            const prevIndex = selectedUpgradeIndex;
-            const numOptions = document.querySelectorAll('.upgrade-card').length;
-            
-            // D-pad Right or Left Stick Right
-            if (gp.buttons[15].pressed || gp.axes[0] > 0.5) {
-                selectedUpgradeIndex = (selectedUpgradeIndex + 1) % numOptions;
-                moved = true;
-            } 
-            // D-pad Left or Left Stick Left
-            else if (gp.buttons[14].pressed || gp.axes[0] < -0.5) {
-                selectedUpgradeIndex = (selectedUpgradeIndex - 1 + numOptions) % numOptions;
-                moved = true;
-            }
-            
-            // D-pad Up/Down (for wrapping)
-            const cardsPerRow = 3; 
-            if (gp.buttons[12].pressed) {
-                selectedUpgradeIndex = Math.max(0, selectedUpgradeIndex - cardsPerRow);
-                moved = true;
-            } else if (gp.buttons[13].pressed) {
-                selectedUpgradeIndex = Math.min(numOptions - 1, selectedUpgradeIndex + cardsPerRow);
-                moved = true;
-            }
+    const now = Date.now();
 
-            if (moved && prevIndex !== selectedUpgradeIndex) {
-                const prevCard = document.querySelectorAll('.upgrade-card')[prevIndex];
-                if (prevCard) {
-                    prevCard.classList.remove('selected');
-                }
-                const newCard = document.querySelectorAll('.upgrade-card')[selectedUpgradeIndex];
-                if (newCard) {
-                    newCard.classList.add('selected');
-                    playUISound('uiClick');
-                    vibrate(10);
-                }
+    const pressed  = (i) => !!gp.buttons?.[i]?.pressed;
+    const btnDown  = pressed(13) || gp.axes[1] > 0.5;
+    const btnUp    = pressed(12) || gp.axes[1] < -0.5;
+    const btnRight = pressed(15) || gp.axes[0] > 0.5;
+    const btnLeft  = pressed(14) || gp.axes[0] < -0.5;
+    const btnA     = pressed(0);
+    const btnB     = pressed(1);
+    const btnStart = pressed(9);
+
+    // Any directional input at all?
+    const anyDir = btnDown || btnUp || btnRight || btnLeft;
+
+    // ── helpers ───────────────────────────────────────────────────────────
+    function applyFocus(items, index) {
+        items.forEach((el, i) => el.classList.toggle('gamepad-focus', i === index));
+        const el = items[index];
+        if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+
+    function moveFocus(items, delta) {
+        if (!items || items.length === 0) return;
+        const next = (_gpNav.menuIndex + delta + items.length) % items.length;
+        _gpNav.menuIndex = next;
+        applyFocus(items, _gpNav.menuIndex);
+        playUISound('uiClick');
+        vibrate(10);
+        lastGamepadUpdate = now;
+    }
+
+    function clearFocus(items) {
+        if (items) items.forEach(el => el.classList.remove('gamepad-focus'));
+    }
+
+    // ── MAIN MENU navigation ──────────────────────────────────────────────
+    if (!gameActive) {
+        // ── Game Over screen ──
+        if (gameOver) {
+            if (now - lastGamepadUpdate < GAMEPAD_INPUT_DELAY) return;
+            if (btnA || btnStart) {
                 lastGamepadUpdate = now;
+                document.getElementById('restartButton')?.click();
             }
-            
-            // Check for confirmation button (e.g., A/X button)
-            if (gp.buttons[0].pressed) {
-                const selectedCard = document.querySelectorAll('.upgrade-card')[selectedUpgradeIndex];
-                if (selectedCard) {
-                    selectedCard.querySelector('button').click();
-                    isGamepadUpgradeMode = false;
-                    lastGamepadUpdate = now;
+            return;
+        }
+
+        // ── Tap to Start screen ──
+        const startScreen = document.getElementById('startScreen');
+        if (startScreen && startScreen.style.display !== 'none') {
+            if (btnA || btnStart) {
+                lastGamepadUpdate = now;
+                document.getElementById('startButton')?.click();
+            }
+            return;
+        }
+
+        const onDifficulty  = difficultyContainer  && difficultyContainer.style.display  !== 'none';
+        const onMap         = mapSelectContainer   && mapSelectContainer.style.display   !== 'none';
+        const onCharacter   = characterSelectContainer && characterSelectContainer.style.display !== 'none';
+        const onUpgradeShop = upgradeShop          && upgradeShop.style.display          !== 'none';
+        const onGuide       = gameGuideModal       && gameGuideModal.style.display       !== 'none';
+        const onAchieve     = achievementsModal    && achievementsModal.style.display    !== 'none';
+        const onCheats      = cheatsModal          && cheatsModal.style.display          !== 'none';
+
+        // Detect screen changes — only initialise focus once on entry
+        const currentScreen = onDifficulty ? 'difficulty' : onMap ? 'map' : onCharacter ? 'character' : onUpgradeShop ? 'shop' : onGuide ? 'guide' : onAchieve ? 'achieve' : onCheats ? 'cheats' : 'none';
+        if (currentScreen !== _gpNav.lastScreen) {
+            _gpNav.lastScreen = currentScreen;
+            _gpNav.menuIndex = 0;
+            // Apply initial highlight for navigable screens
+            if (onDifficulty) {
+                const btns = Array.from(difficultyContainer.querySelectorAll('button:not([disabled])'));
+                applyFocus(btns, 0);
+            } else if (onMap) {
+                const tiles = Array.from(mapSelectContainer.querySelectorAll('.map-tile'));
+                applyFocus(tiles, 0);
+            } else if (onCharacter) {
+                const tiles = Array.from(characterSelectContainer.querySelectorAll('.character-tile:not(.locked)'));
+                applyFocus(tiles, 0);
+            }
+        }
+
+        // Only process directional/confirm input after the debounce delay
+        if (now - lastGamepadUpdate < GAMEPAD_INPUT_DELAY) return;
+
+        // ── Difficulty screen ──
+        if (onDifficulty) {
+            const btns = Array.from(difficultyContainer.querySelectorAll('button:not([disabled])'));
+            if (btnDown || btnRight) { moveFocus(btns, 1); return; }
+            if (btnUp   || btnLeft)  { moveFocus(btns, -1); return; }
+            if (btnA) {
+                clearFocus(btns);
+                btns[_gpNav.menuIndex]?.click();
+                _gpNav.menuIndex = 0;
+                lastGamepadUpdate = now;
+                return;
+            }
+        }
+
+        // ── Map select ──
+        if (onMap) {
+            const tiles = Array.from(mapSelectContainer.querySelectorAll('.map-tile'));
+            if (btnRight || btnDown) { moveFocus(tiles, 1); return; }
+            if (btnLeft  || btnUp)   { moveFocus(tiles, -1); return; }
+            if (btnA) { clearFocus(tiles); tiles[_gpNav.menuIndex]?.click(); _gpNav.menuIndex = 0; lastGamepadUpdate = now; return; }
+            if (btnB) { clearFocus(tiles); _gpNav.menuIndex = 0; lastGamepadUpdate = now; document.getElementById('backToDifficultySelectButton')?.click(); return; }
+        }
+
+        // ── Character select ──
+        if (onCharacter) {
+            const tiles = Array.from(characterSelectContainer.querySelectorAll('.character-tile:not(.locked)'));
+            if (btnRight || btnDown) { moveFocus(tiles, 1); return; }
+            if (btnLeft  || btnUp)   { moveFocus(tiles, -1); return; }
+            if (btnA) { clearFocus(tiles); tiles[_gpNav.menuIndex]?.click(); _gpNav.menuIndex = 0; lastGamepadUpdate = now; return; }
+            if (btnB) { clearFocus(tiles); _gpNav.menuIndex = 0; lastGamepadUpdate = now; document.getElementById('backToMenuFromCharsButton')?.click(); return; }
+        }
+
+        // ── Upgrade shop ──
+        if (onUpgradeShop) {
+            const allCards = Array.from(upgradeShop.querySelectorAll('.permanent-upgrade-card'));
+            if (allCards.length > 0) {
+                if (_gpNav.lastScreen !== 'shop') {
+                    _gpNav.lastScreen = 'shop';
+                    _gpNav.menuIndex = 0;
+                    allCards.forEach((el, i) => el.classList.toggle('gamepad-focus', i === 0));
+                }
+                if (btnDown || btnRight) { moveFocus(allCards, 1); return; }
+                if (btnUp   || btnLeft)  { moveFocus(allCards, -1); return; }
+                if (btnA) {
+                    const btn = allCards[_gpNav.menuIndex]?.querySelector('button:not([disabled])');
+                    if (btn) { btn.click(); lastGamepadUpdate = now; }
                     return;
                 }
             }
+            if (btnB) { clearFocus(allCards); _gpNav.menuIndex = 0; lastGamepadUpdate = now; document.getElementById('backToMenuButton')?.click(); return; }
         }
+
+        // ── How to Play — scroll with D-pad, any confirm to close ──
+        if (onGuide) {
+            const wrapper = gameGuideModal.querySelector('.content-wrapper');
+            if (btnDown) { wrapper?.scrollBy(0, 120); lastGamepadUpdate = now; return; }
+            if (btnUp)   { wrapper?.scrollBy(0, -120); lastGamepadUpdate = now; return; }
+            if (btnB || btnA) { lastGamepadUpdate = now; document.getElementById('backToDifficultyButton')?.click(); return; }
+        }
+
+        // ── Achievements ──
+        if (onAchieve) {
+            const achCards = Array.from(achievementsModal.querySelectorAll('.achievement-card'));
+            if (achCards.length > 0) {
+                if (_gpNav.lastScreen !== 'achieve') {
+                    _gpNav.lastScreen = 'achieve';
+                    _gpNav.menuIndex = 0;
+                    achCards.forEach((el, i) => el.classList.toggle('gamepad-focus', i === 0));
+                }
+                if (btnDown || btnRight) { moveFocus(achCards, 1); return; }
+                if (btnUp   || btnLeft)  { moveFocus(achCards, -1); return; }
+                // Y button (3) = open cheats menu
+                if (pressed(3)) { clearFocus(achCards); _gpNav.menuIndex = 0; lastGamepadUpdate = now; document.getElementById('cheatsMenuButton')?.click(); return; }
+            }
+            if (btnB) { clearFocus(achCards); _gpNav.menuIndex = 0; lastGamepadUpdate = now; document.getElementById('backToMenuFromAchievements')?.click(); return; }
+        }
+
+        // ── Cheats ──
+        if (onCheats) {
+            const cheatCards = Array.from(cheatsModal.querySelectorAll('.cheat-card:not(.locked)'));
+            if (cheatCards.length > 0) {
+                if (_gpNav.lastScreen !== 'cheats') {
+                    _gpNav.lastScreen = 'cheats';
+                    _gpNav.menuIndex = 0;
+                    cheatCards.forEach((el, i) => el.classList.toggle('gamepad-focus', i === 0));
+                }
+                if (btnDown || btnRight) { moveFocus(cheatCards, 1); return; }
+                if (btnUp   || btnLeft)  { moveFocus(cheatCards, -1); return; }
+                if (btnA) {
+                    const checkbox = cheatCards[_gpNav.menuIndex]?.querySelector('input[type="checkbox"]');
+                    if (checkbox) { checkbox.checked = !checkbox.checked; checkbox.dispatchEvent(new Event('change')); playUISound('uiClick'); vibrate(10); lastGamepadUpdate = now; }
+                    return;
+                }
+            }
+            if (btnB) { clearFocus(cheatCards); _gpNav.menuIndex = 0; lastGamepadUpdate = now; document.getElementById('backToAchievementsButton')?.click(); return; }
+        }
+
+        return;
     }
-    
-    // --- EXISTING GAMEPAD MOVEMENT LOGIC ---
+
+    // ── IN-GAME: pause menu ───────────────────────────────────────────────
+    if (gamePaused && !isGamepadUpgradeMode) {
+        if (now - lastGamepadUpdate < GAMEPAD_INPUT_DELAY) return;
+        const pauseOverlayEl = document.getElementById('pauseOverlay');
+        if (pauseOverlayEl && pauseOverlayEl.style.display !== 'none') {
+
+            // All navigable items: music slider, effects slider, zoom toggle, resume, restart
+            const musicSlider   = document.getElementById('musicVolume');
+            const effectsSlider = document.getElementById('effectsVolume');
+            const zoomToggleEl  = document.getElementById('zoomToggle');
+            const pauseBtns     = Array.from(pauseOverlayEl.querySelectorAll('button'));
+
+            // Build a flat list: [musicSlider, effectsSlider, zoomToggle, ...buttons]
+            const pauseItems = [musicSlider, effectsSlider, zoomToggleEl, ...pauseBtns].filter(Boolean);
+
+            // Initialise focus on pause open
+            if (_gpNav.lastScreen !== 'pause') {
+                _gpNav.lastScreen = 'pause';
+                _gpNav.menuIndex = 0;
+                _gpNav._sliderActive = false;
+                pauseItems.forEach((el, i) => el.classList.toggle('gamepad-focus', i === 0));
+            }
+
+            const focused = pauseItems[_gpNav.menuIndex];
+
+            // If a slider is "active" (selected with A), left/right adjusts it
+            if (_gpNav._sliderActive && focused && focused.type === 'range') {
+                const step = parseFloat(focused.step) || 1;
+                if (btnRight) { focused.value = Math.min(parseFloat(focused.max), parseFloat(focused.value) + step * 2); focused.dispatchEvent(new Event('input')); lastGamepadUpdate = now; return; }
+                if (btnLeft)  { focused.value = Math.max(parseFloat(focused.min), parseFloat(focused.value) - step * 2); focused.dispatchEvent(new Event('input')); lastGamepadUpdate = now; return; }
+                // B = deselect slider
+                if (btnB) { _gpNav._sliderActive = false; playUISound('uiClick'); lastGamepadUpdate = now; return; }
+                return;
+            }
+
+            // Navigate up/down through items
+            if (btnDown) {
+                focused?.classList.remove('gamepad-focus');
+                _gpNav.menuIndex = (_gpNav.menuIndex + 1) % pauseItems.length;
+                pauseItems[_gpNav.menuIndex]?.classList.add('gamepad-focus');
+                playUISound('uiClick'); vibrate(10); lastGamepadUpdate = now; return;
+            }
+            if (btnUp) {
+                focused?.classList.remove('gamepad-focus');
+                _gpNav.menuIndex = (_gpNav.menuIndex - 1 + pauseItems.length) % pauseItems.length;
+                pauseItems[_gpNav.menuIndex]?.classList.add('gamepad-focus');
+                playUISound('uiClick'); vibrate(10); lastGamepadUpdate = now; return;
+            }
+
+            // A = confirm / activate
+            if (btnA) {
+                if (focused && focused.type === 'range') {
+                    // Enter slider adjustment mode
+                    _gpNav._sliderActive = true;
+                    playUISound('uiClick'); lastGamepadUpdate = now; return;
+                } else if (focused && focused.type === 'checkbox') {
+                    focused.checked = !focused.checked;
+                    focused.dispatchEvent(new Event('change'));
+                    playUISound('uiClick'); vibrate(10); lastGamepadUpdate = now; return;
+                } else if (focused && focused.tagName === 'BUTTON') {
+                    focused.classList.remove('gamepad-focus');
+                    focused.click();
+                    _gpNav.menuIndex = 0; lastGamepadUpdate = now; return;
+                }
+            }
+
+            // B / Start = resume
+            if (btnB || btnStart) {
+                pauseItems.forEach(el => el.classList.remove('gamepad-focus'));
+                _gpNav.lastScreen = '';
+                _gpNav._sliderActive = false;
+                lastGamepadUpdate = now;
+                togglePause();
+                return;
+            }
+        }
+        return;
+    }
+
+    // ── IN-GAME: upgrade menu ─────────────────────────────────────────────
+    if (isGamepadUpgradeMode) {
+        if (now - lastGamepadUpdate < GAMEPAD_INPUT_DELAY) return;
+        const numOptions = document.querySelectorAll('.upgrade-card').length;
+        if (numOptions === 0) return;
+        const cardsPerRow = 3;
+        const prev = selectedUpgradeIndex;
+
+        if (btnRight) selectedUpgradeIndex = (selectedUpgradeIndex + 1) % numOptions;
+        else if (btnLeft) selectedUpgradeIndex = (selectedUpgradeIndex - 1 + numOptions) % numOptions;
+        if (btnDown) selectedUpgradeIndex = Math.min(numOptions - 1, selectedUpgradeIndex + cardsPerRow);
+        else if (btnUp) selectedUpgradeIndex = Math.max(0, selectedUpgradeIndex - cardsPerRow);
+
+        if (selectedUpgradeIndex !== prev) {
+            document.querySelectorAll('.upgrade-card')[prev]?.classList.remove('selected');
+            const newCard = document.querySelectorAll('.upgrade-card')[selectedUpgradeIndex];
+            if (newCard) { newCard.classList.add('selected'); playUISound('uiClick'); vibrate(10); }
+            lastGamepadUpdate = now;
+        }
+        if (btnA) {
+            const selectedCard = document.querySelectorAll('.upgrade-card')[selectedUpgradeIndex];
+            if (selectedCard) { selectedCard.querySelector('button')?.click(); isGamepadUpgradeMode = false; lastGamepadUpdate = now; }
+        }
+        return;
+    }
+
+    // ── IN-GAME: movement + actions ───────────────────────────────────────
     let lx = applyDeadzone(gp.axes[0] || 0);
     let ly = applyDeadzone(gp.axes[1] || 0);
     const lmag = Math.hypot(lx, ly);
-    if (lmag > 0) {
-        joystickDirX = lx / lmag;
-        joystickDirY = ly / lmag;
-    } else {
-        joystickDirX = 0;
-        joystickDirY = 0;
-    }
+    if (lmag > 0) { joystickDirX = lx / lmag; joystickDirY = ly / lmag; }
+    else { joystickDirX = 0; joystickDirY = 0; }
 
     let rx = applyDeadzone(gp.axes[2] || 0);
     let ry = applyDeadzone(gp.axes[3] || 0);
     const rmag = Math.hypot(rx, ry);
-    if (rmag > 0) {
-        aimDx = rx / rmag;
-        aimDy = ry / rmag;
-    } else {
-        aimDx = 0;
-        aimDy = 0;
-    }
+    if (rmag > 0) { aimDx = rx / rmag; aimDy = ry / rmag; }
+    else { aimDx = 0; aimDy = 0; }
 
-    const pressed = (i) => !!gp.buttons?.[i]?.pressed;
     if (pressed(7) && !gp._rTriggerLatch) {
-    gp._rTriggerLatch = true;
-    triggerDash(player);
-} else if (!pressed(7)) gp._rTriggerLatch = false;
-    
-    if ((pressed(9) || pressed(1)) && !gp._pauseLatch) {
+        gp._rTriggerLatch = true;
+        if (player) triggerDash(player);
+    } else if (!pressed(7)) { gp._rTriggerLatch = false; }
+
+    if ((btnStart || btnB) && !gp._pauseLatch) {
         gp._pauseLatch = true;
         if (gameActive && !gameOver) togglePause();
-    } else if (!pressed(9) && !pressed(1)) gp._pauseLatch = false;
+    } else if (!btnStart && !btnB) { gp._pauseLatch = false; }
 }
 
         let joystickDirX = 0; let joystickDirY = 0;
@@ -874,9 +1005,20 @@ function handleGamepadInput() {
         canvas.addEventListener('mouseenter', () => { if (gameActive && !document.body.classList.contains('is-mobile')) { isMouseInCanvas = true; } });
         canvas.addEventListener('mouseleave', () => { if (gameActive) { isMouseInCanvas = false; } });
         canvas.addEventListener('mousedown', (e) => {
-    // e.button === 0 corresponds to the left mouse button
     if (e.button === 0 && gameActive && !gamePaused && !gameOver) {
-        triggerDash(player);
+        if (cheats.click_to_fire) {
+            // Calculate angle from player to mouse click position directly
+            const rect = canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+            const playerScreenX = player.x - cameraOffsetX;
+            const playerScreenY = player.y - cameraOffsetY;
+            const clickAngle = Math.atan2(my - playerScreenY, mx - playerScreenX);
+            createWeapon(player, clickAngle);
+            lastWeaponFireTime = Date.now();
+        } else {
+            triggerDash(player);
+        }
     }
 });
         
@@ -1151,13 +1293,22 @@ document.body.addEventListener('touchstart', (e) => {
             const currentBaseEnemySpeed = baseEnemySpeed * difficultySpeedMultiplier * levelSpeedMultiplier;
             
             const config = ENEMY_CONFIGS[enemyEmoji];
+
+            // Scale enemy health with powerups collected so the game stays challenging
+            // as the player gets stronger. Every 4 powerups adds +1 health on hard, +1 per 6 on medium.
+            const powerupHealthBonus = currentDifficulty === 'hard'
+                ? Math.floor(player.boxPickupsCollectedCount / 4)
+                : currentDifficulty === 'medium'
+                    ? Math.floor(player.boxPickupsCollectedCount / 6)
+                    : 0;
+
             const newEnemy = { 
                 x, y, size: config.size, emoji: enemyEmoji, speed: currentBaseEnemySpeed * config.speedMultiplier, 
-                health: config.baseHealth, isHit: false, isHitByOrbiter: false, isHitByCircle: false, 
+                health: config.baseHealth + powerupHealthBonus,
+                isHit: false, isHitByOrbiter: false, isHitByCircle: false, 
                 isFrozen: false, freezeEndTime: 0, originalSpeed: currentBaseEnemySpeed * config.speedMultiplier, 
                 isSlowedByPuddle: false, isBoss: false, isHitByAxe: false,
                 isIgnited: false, ignitionEndTime: 0, lastIgnitionDamageTime: 0
-                
             };
             if (config.initialProps) Object.assign(newEnemy, config.initialProps());
             enemies.push(newEnemy);
@@ -1165,6 +1316,14 @@ document.body.addEventListener('touchstart', (e) => {
 
         function handleEnemyDeath(enemy, explosionId = null) {
             if (enemy.isHit) return;
+            // Zombie enemies: revive once with half health
+            if (cheats.zombie_enemies && !enemy._hasRevived) {
+                enemy._hasRevived = true;
+                enemy.health = Math.ceil((ENEMY_CONFIGS[enemy.emoji]?.baseHealth || 1) / 2);
+                enemy.isHit = false;
+                floatingTexts.push({ text: "Revived!", x: enemy.x, y: enemy.y - enemy.size, startTime: Date.now(), duration: 800, color: '#00FF00' });
+                return;
+            }
             enemy.isHit = true;
             enemiesDefeatedCount++;
             player.coins++; // Grant one coin per kill
@@ -1194,6 +1353,19 @@ document.body.addEventListener('touchstart', (e) => {
 
             createBloodPuddle(enemy.x, enemy.y, enemy.size);
             playSound('enemyDeath');
+
+            // Vampire mode: restore 1 health on kill (max every 2s to avoid spam)
+            if (cheats.vampire_mode) {
+                const now2 = Date.now();
+                if (!player._vampireLastHealTime || now2 - player._vampireLastHealTime > 2000) {
+                    if (player.lives < player.maxLives) {
+                        player.lives++;
+                        updateUIStats();
+                        floatingTexts.push({ text: "+❤️", x: player.x, y: player.y - player.size, startTime: now2, duration: 1000, color: '#FF0000' });
+                    }
+                    player._vampireLastHealTime = now2;
+                }
+            }
 
             if (enemy.isBoss) {
                 createPickup(enemy.x, enemy.y, BOSS_XP_EMOJI, enemy.size / 2, BOSS_XP_DROP);
@@ -1436,7 +1608,7 @@ function createBoss() {
                 const randomIndex = Math.floor(Math.random() * availableUpgrades.length);
                 selectedChoices.push(availableUpgrades.splice(randomIndex, 1)[0]);
             }
-            selectedChoices.forEach(upgrade => {
+            selectedChoices.forEach((upgrade, index) => {
                 const upgradeCard = document.createElement('div');
                 upgradeCard.classList.add('upgrade-card');
                 const borderColor = UPGRADE_BORDER_COLORS[upgrade.type] || "#66bb6a";
@@ -1450,16 +1622,12 @@ function createBoss() {
                 `;
                 upgradeCard.querySelector('button').onclick = () => { applyUpgrade(upgrade); vibrate(10); };
                 upgradeCard.addEventListener('click', () => {
-             // De-select all cards first
-             document.querySelectorAll('.upgrade-card').forEach(card => card.classList.remove('selected'));
-             // Select the clicked card
-             upgradeCard.classList.add('selected');
-             // Set the selected index to the clicked card's index
-             selectedUpgradeIndex = index;
-             // Vibrate and play sound
-             vibrate(10);
-             playUISound('uiClick');
-        });
+                    document.querySelectorAll('.upgrade-card').forEach(card => card.classList.remove('selected'));
+                    upgradeCard.classList.add('selected');
+                    selectedUpgradeIndex = index;
+                    vibrate(10);
+                    playUISound('uiClick');
+                });
                 upgradeCard.addEventListener('mouseover', () => playUISound('uiClick'));
                 if (upgradeOptionsContainer) upgradeOptionsContainer.appendChild(upgradeCard);
             });
@@ -1692,11 +1860,9 @@ async function tryLoadMusic(retries = 3) {
             }
             if (cheats.all_powerups_start) {
                 console.log("Activating all power-ups cheat.");
-                // Activate all standard powerups
                 for(const powerupKey in ALWAYS_AVAILABLE_PICKUPS){
                     activatePowerup(powerupKey);
                 }
-                // Activate all unlocked special powerups
                 for(const powerupKey in UNLOCKABLE_PICKUPS){
                      if(playerData.unlockedPickups[powerupKey]){
                          activatePowerup(powerupKey);
@@ -1707,7 +1873,40 @@ async function tryLoadMusic(retries = 3) {
                 activatePowerup('dog_companion');
             }
             if (cheats.magnet_mode) {
-                player.magnetRadius = WORLD_WIDTH; // Set a huge magnet radius
+                player.magnetRadius = WORLD_WIDTH;
+            }
+            if (cheats.giant_mode) {
+                player.size = 70;
+            }
+            if (cheats.tiny_mode) {
+                player.size = 17;
+            }
+            if (cheats.clone_army) {
+                // Spawn 3-5 permanent clones using the existing doppelganger system
+                // We store them as extra doppelgangers in a separate array
+                const cloneCount = 3 + Math.floor(Math.random() * 3);
+                if (!window.cloneArmy) window.cloneArmy = [];
+                window.cloneArmy.length = 0;
+                for (let ci = 0; ci < cloneCount; ci++) {
+                    const angle = (ci / cloneCount) * Math.PI * 2;
+                    window.cloneArmy.push({
+                        x: player.x + Math.cos(angle) * 60,
+                        y: player.y + Math.sin(angle) * 60,
+                        size: player.size * 0.8,
+                        rotationAngle: 0,
+                        lastFireTime: 0,
+                        endTime: Infinity
+                    });
+                }
+            }
+            if (cheats.chaos_mode) {
+                // Pick 5 random cheats and enable them for this run
+                const cheatKeys = Object.keys(CHEATS).filter(k => k !== 'chaos_mode' && k !== 'hearts_start_10');
+                const shuffled = cheatKeys.sort(() => Math.random() - 0.5).slice(0, 5);
+                shuffled.forEach(k => { cheats[k] = true; });
+                floatingTexts.push({ text: "CHAOS!", x: player.x, y: player.y - 60, startTime: Date.now(), duration: 2500, color: '#FF00FF' });
+                // Re-apply so startup cheats like giant_mode take effect
+                applyCheats();
             }
         }
 
@@ -1809,11 +2008,16 @@ async function startGame() {
             
             dog = { x: player.x, y: player.y, size: 25, state: 'returning', target: null, lastHomingShotTime: 0 };
             player2 = null;
-            merchant = null; // Ensure no merchant at start
+            merchants.length = 0; // Ensure no merchants at start
 
             temporalWardActive = false; isTimeStopped = false; timeStopEndTime = 0;
             resetRunStats();
             applyCheats();
+            // Reset per-run cheat state
+            player._shieldLastHitTime = 0;
+            player._vampireLastHealTime = 0;
+            if (window.cloneArmy) window.cloneArmy.length = 0;
+            if (!cheats.infinite_dash) player.dashCooldown = playerData.hasReducedDashCooldown ? 3000 : 6000;
 
             player.x = WORLD_WIDTH / 2; player.y = WORLD_HEIGHT / 2;
             aimDx = 0; aimDy = 0;
@@ -1856,8 +2060,8 @@ async function startGame() {
             document.querySelector('.bottom-menu-buttons').style.display = 'flex';
 
             if (gameContainer) gameContainer.style.display = 'none';
-            if (gameStats) gameStats.style.display = 'none'; // Hide game stats
-            if (mobileResetButton) mobileResetButton.style.display = 'block'; // Hide mobile reset
+            if (gameStats) gameStats.style.display = 'none';
+            if (mobileResetButton) mobileResetButton.style.display = 'block';
             if (movementStickBase) movementStickBase.style.display = 'none';
             if (firestickBase) firestickBase.style.display = 'none';
             if (upgradeMenu) upgradeMenu.style.display = 'none';
@@ -1876,12 +2080,27 @@ async function startGame() {
             if (difficultyContainer) difficultyContainer.style.display = 'block';
             if (canvas) canvas.style.cursor = 'default';
             isMouseInCanvas = false; cameraZoom = 1.0;
+            // Reset gamepad nav so the difficulty screen re-initialises focus cleanly
+            // Also clear gameOver so the gamepad handler doesn't get stuck on the game over block
+            gameOver = false;
+            if (typeof _gpNav !== 'undefined') {
+                document.querySelectorAll('.gamepad-focus').forEach(el => el.classList.remove('gamepad-focus'));
+                _gpNav.lastScreen = '';
+                _gpNav.menuIndex = 0;
+            }
         }
         function togglePause() {
             vibrate(20);
             gamePaused = !gamePaused;
             if (gamePaused) { pauseOverlay.style.display = 'flex'; Tone.Transport.pause(); } 
-            else { pauseOverlay.style.display = 'none'; Tone.Transport.start(); }
+            else {
+                pauseOverlay.style.display = 'none';
+                Tone.Transport.start();
+                // Reset pause nav state so it re-initialises cleanly next open
+                if (typeof _gpNav !== 'undefined') { _gpNav.lastScreen = ''; _gpNav.menuIndex = 0; }
+                const pauseBtns = Array.from(pauseOverlay.querySelectorAll('button'));
+                pauseBtns.forEach(el => el.classList.remove('gamepad-focus'));
+            }
         }
         
         function triggerDash(entity) {

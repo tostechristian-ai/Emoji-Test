@@ -115,20 +115,33 @@
                     y = Math.random() * WORLD_HEIGHT;
                     dist = Math.hypot(x - spawnPos.x, y - spawnPos.y);
                 } while (dist < playerSafeRadius);
-                destructibles.push({ x, y, size: 30, health: Infinity, emoji: '🧱' });
+                destructibles.push({ x, y, size: 30, health: 2, maxHealth: 2, emoji: '🧱' });
             }
         }
 
         function spawnRandomBarrel() {
-            const spawnMargin = 50; let x, y;
-            const edge = Math.floor(Math.random() * 4);
-            switch(edge) {
-                case 0: x = Math.random() * WORLD_WIDTH; y = -spawnMargin; break;
-                case 1: x = WORLD_WIDTH + spawnMargin; y = Math.random() * WORLD_HEIGHT; break;
-                case 2: x = Math.random() * WORLD_WIDTH; y = WORLD_HEIGHT + spawnMargin; break;
-                case 3: x = -spawnMargin; y = Math.random() * WORLD_HEIGHT; break;
-            }
-             destructibles.push({ x: x, y: y, size: 15, health: 1, maxHealth: 1, emoji: '🛢️' });
+            // Spawn within the world, at a random distance from the player (not too close, not off-screen)
+            const minDist = 150;
+            const maxDist = 500;
+            const angle = Math.random() * Math.PI * 2;
+            const dist = minDist + Math.random() * (maxDist - minDist);
+            let x = player.x + Math.cos(angle) * dist;
+            let y = player.y + Math.sin(angle) * dist;
+            x = Math.max(50, Math.min(WORLD_WIDTH - 50, x));
+            y = Math.max(50, Math.min(WORLD_HEIGHT - 50, y));
+            destructibles.push({ x, y, size: 15, health: 1, maxHealth: 1, emoji: '🛢️' });
+        }
+
+        function spawnRandomBrick() {
+            const minDist = 150;
+            const maxDist = 500;
+            const angle = Math.random() * Math.PI * 2;
+            const dist = minDist + Math.random() * (maxDist - minDist);
+            let x = player.x + Math.cos(angle) * dist;
+            let y = player.y + Math.sin(angle) * dist;
+            x = Math.max(50, Math.min(WORLD_WIDTH - 50, x));
+            y = Math.max(50, Math.min(WORLD_HEIGHT - 50, y));
+            destructibles.push({ x, y, size: 30, health: 2, maxHealth: 2, emoji: '🧱' });
         }
 
         function handleBarrelDestruction(barrel) {
@@ -146,6 +159,24 @@
                     }
                 }
             });
+        }
+
+        function handleBrickDestruction(brick) {
+            playSound('enemyDeath');
+            // White debris particles instead of red blood
+            const particleCount = 8;
+            const speed = 2.5 + Math.random() * 2;
+            for (let i = 0; i < particleCount; i++) {
+                const angle = (i / particleCount) * Math.PI * 2;
+                bloodSplatters.push({
+                    x: brick.x, y: brick.y,
+                    dx: Math.cos(angle) * speed + (Math.random() - 0.5),
+                    dy: Math.sin(angle) * speed + (Math.random() - 0.5),
+                    size: 3 + Math.random() * 4,
+                    spawnTime: Date.now(), lifetime: 900 + Math.random() * 400,
+                    isWhite: true
+                });
+            }
         }
         
        function showMapSelectScreen() {

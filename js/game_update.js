@@ -5,21 +5,24 @@
         function update() {
     if (gamePaused || gameOver || !gameActive) return;
 
+    // Frame counter for throttling expensive per-enemy checks
+    if (!update._frame) update._frame = 0;
+    update._frame = (update._frame + 1) % 6;
+
     // *** OPTIMIZATION: Clear and repopulate the Quadtree each frame ***
     quadtree.clear();
-    const allGameObjects = [...enemies, ...destructibles, player];
-    if (player2 && player2.active) allGameObjects.push(player2);
-    if (doppelganger) allGameObjects.push(doppelganger);
-    
-    for(const obj of allGameObjects) {
-        quadtree.insert({
-            x: obj.x - obj.size / 2,
-            y: obj.y - obj.size / 2,
-            width: obj.size,
-            height: obj.size,
-            ref: obj // Keep a reference to the original object
-        });
+    // Insert directly without building a temp array
+    for (let i = 0; i < enemies.length; i++) {
+        const obj = enemies[i];
+        quadtree.insert({ x: obj.x - obj.size/2, y: obj.y - obj.size/2, width: obj.size, height: obj.size, ref: obj });
     }
+    for (let i = 0; i < destructibles.length; i++) {
+        const obj = destructibles[i];
+        quadtree.insert({ x: obj.x - obj.size/2, y: obj.y - obj.size/2, width: obj.size, height: obj.size, ref: obj });
+    }
+    quadtree.insert({ x: player.x - player.size/2, y: player.y - player.size/2, width: player.size, height: player.size, ref: player });
+    if (player2 && player2.active) quadtree.insert({ x: player2.x - player2.size/2, y: player2.y - player2.size/2, width: player2.size, height: player2.size, ref: player2 });
+    if (doppelganger) quadtree.insert({ x: doppelganger.x - doppelganger.size/2, y: doppelganger.y - doppelganger.size/2, width: doppelganger.size, height: doppelganger.size, ref: doppelganger });
     // *** END OF QUADTREE POPULATION ***
 
     const now = Date.now();
@@ -31,7 +34,11 @@
                 }
             }
             lastFrameTime = now;
-            checkAchievements();
+            // Throttle achievement checks to once per second — no need every frame
+            if (!update._lastAchievementCheck || now - update._lastAchievementCheck > 1000) {
+                checkAchievements();
+                update._lastAchievementCheck = now;
+            }
             
             if (Date.now() - lastMerchantSpawnTime >= MERCHANT_SPAWN_INTERVAL) {
     spawnMerchant(player.x + 200, player.y); 
@@ -63,8 +70,10 @@ for (let i = merchants.length - 1; i >= 0; i--) {
                 lastCircleSpawnEventTime = now;
             }
 
-            if (now - lastBarrelSpawnTime > 30000) {
+            if (now - lastBarrelSpawnTime > 20000) {
                 spawnRandomBarrel();
+                if (Math.random() < 0.5) spawnRandomBarrel(); // occasionally spawn 2
+                spawnRandomBrick(); // always spawn a brick wall too
                 lastBarrelSpawnTime = now;
             }
             
@@ -77,6 +86,9 @@ for (let i = merchants.length - 1; i >= 0; i--) {
             if (keys['ArrowRight'] || keys['d']) moveX += 1;
 
             if (moveX === 0 && moveY === 0) { moveX = joystickDirX; moveY = joystickDirY; }
+
+            // Mirror mode: flip horizontal movement
+            if (cheats.mirror_mode) moveX = -moveX;
 
             const moveMagnitude = Math.hypot(moveX, moveY);
             if (moveMagnitude > 0) {
@@ -105,6 +117,8 @@ for (let i = merchants.length - 1; i >= 0; i--) {
             
             let currentPlayerSpeed = player.speed;
             if (cheats.double_game_speed) currentPlayerSpeed *= 2;
+            if (cheats.slow_mo_mode) currentPlayerSpeed *= 0.5;
+            if (cheats.infinite_dash) player.dashCooldown = 0;
 
 
             if(player.isDashing) {
@@ -112,16 +126,32 @@ for (let i = merchants.length - 1; i >= 0; i--) {
                 if(now > player.dashEndTime) {
                     player.isDashing = false;
                     player.isInvincible = false;
+                    // Explosive player: explode at end of dash
+                    if (cheats.explosive_player) {
+                        const blastRadius = player.size * 3;
+                        explosions.push({ x: player.x, y: player.y, radius: blastRadius, startTime: now, duration: 300 });
+                        for (let ei = enemies.length - 1; ei >= 0; ei--) {
+                            const en = enemies[ei];
+                            const dx = en.x - player.x, dy = en.y - player.y;
+                            if (dx*dx + dy*dy < blastRadius*blastRadius) {
+                                en.health -= player.damageMultiplier * 2;
+                                createBloodSplatter(en.x, en.y);
+                                if (en.health <= 0) handleEnemyDeath(en);
+                            }
+                        }
+                    }
                 } else {
                     if (hasDashInvincibility) player.isInvincible = true;
-                    // Spawn dash trail
-                    if (Math.random() > 0.5) {
+                    // Spawn dash smoke emoji — throttled to every 80ms, hard cap 15
+                    if (smokeParticles.length < 15 && (!player._lastDashSmoke || now - player._lastDashSmoke > 80)) {
                         smokeParticles.push({
-                            x: player.x, y: player.y + player.size / 4,
-                            dx: (Math.random() - 0.5) * 0.5, dy: (Math.random() - 0.5) * 0.5,
-                            size: 15 + Math.random() * 10, alpha: 0.8,
-                            angle: Math.PI / 2 + (Math.random() - 0.5) * 0.2
+                            x: player.x + (Math.random() - 0.5) * player.size * 0.5,
+                            y: player.y + (Math.random() - 0.5) * player.size * 0.5,
+                            dx: (Math.random() - 0.5) * 0.4,
+                            dy: (Math.random() - 0.5) * 0.4,
+                            size: 12 + Math.random() * 6, alpha: 0.7,
                         });
+                        player._lastDashSmoke = now;
                     }
                 }
             }
@@ -336,15 +366,61 @@ for (let i = merchants.length - 1; i >= 0; i--) {
             }
 
 
-            let enemySpawnCap = cheats.noSpawnCap ? Infinity : 100;
+            // Enemy cap: scales with difficulty. Hard allows up to 150, medium 120, easy 80.
+            // Also scales slightly with powerups collected to keep challenge proportional.
+            const baseCap = currentDifficulty === 'hard' ? 150 : currentDifficulty === 'medium' ? 120 : 80;
+            const powerupPressure = Math.floor(player.boxPickupsCollectedCount / 3); // +1 enemy per 3 powerups
+            let enemySpawnCap = cheats.noSpawnCap ? Infinity : Math.min(baseCap + powerupPressure, 200);
+
+            // Rain of bullets cheat: drop bullets from sky every second
+            if (cheats.rain_of_bullets && !isTimeStopped) {
+                if (!update._lastRainBulletTime) update._lastRainBulletTime = 0;
+                if (now - update._lastRainBulletTime > 1000) {
+                    for (let rb = 0; rb < 5; rb++) {
+                        const rx = player.x + (Math.random() - 0.5) * 400;
+                        const ry = player.y - 300;
+                        for(const weapon of weaponPool) {
+                            if(!weapon.active) {
+                                weapon.x = rx; weapon.y = ry;
+                                weapon.size = 38; weapon.speed = 6;
+                                weapon.angle = Math.PI / 2;
+                                weapon.dx = 0; weapon.dy = 6;
+                                weapon.lifetime = now + 2000;
+                                weapon.hitsLeft = 1;
+                                weapon.hitEnemies.length = 0;
+                                weapon.owner = 'player';
+                                weapon.active = true;
+                                break;
+                            }
+                        }
+                    }
+                    update._lastRainBulletTime = now;
+                }
+            }
+
+            // Coin rain cheat: drop coins from sky randomly
+            if (cheats.coin_rain) {
+                if (!update._lastCoinRainTime) update._lastCoinRainTime = 0;
+                if (now - update._lastCoinRainTime > 2000) {
+                    for (let cr = 0; cr < 3; cr++) {
+                        const cx = player.x + (Math.random() - 0.5) * 600;
+                        const cy = player.y + (Math.random() - 0.5) * 400;
+                        createPickup(cx, cy, COIN_EMOJI, COIN_SIZE, COIN_XP_VALUE);
+                    }
+                    update._lastCoinRainTime = now;
+                }
+            }
             let currentEnemySpawnInterval = enemySpawnInterval / Math.pow(1.3, player.boxPickupsCollectedCount) * (1 - 0.01 * (player.level - 1));
-            currentEnemySpawnInterval = Math.max(80, currentEnemySpawnInterval);
+            // Hard mode spawns faster to fill the higher cap
+            if (currentDifficulty === 'hard') currentEnemySpawnInterval *= 0.65;
+            else if (currentDifficulty === 'medium') currentEnemySpawnInterval *= 0.82;
+            currentEnemySpawnInterval = Math.max(currentDifficulty === 'hard' ? 50 : 80, currentEnemySpawnInterval);
             if (player.level > 0 && player.level % BOSS_SPAWN_INTERVAL_LEVELS === 0 && player.level !== lastBossLevelSpawned) {
                 createBoss();
                 lastBossLevelSpawned = player.level;
             }
             if (enemies.length < enemySpawnCap && now - lastEnemySpawnTime > currentEnemySpawnInterval) {
-                createEnemy();
+                if (cheats.boss_rush_mode) { createBoss(); } else { createEnemy(); }
                 lastEnemySpawnTime = now;
             }
             
@@ -352,12 +428,24 @@ for (let i = merchants.length - 1; i >= 0; i--) {
             enemies.forEach((enemy) => {
                 if (isTimeStopped) return;
                 if (enemy.isIgnited) {
-                    if (now > enemy.ignitionEndTime) { enemy.isIgnited = false; } 
-                    else if (now - enemy.lastIgnitionDamageTime > 3000) {
-                        enemy.health -= 1;
-                        createBloodSplatter(enemy.x, enemy.y);
-                        if (enemy.health <= 0) { handleEnemyDeath(enemy); }
-                        enemy.lastIgnitionDamageTime = now;
+                    if (now > enemy.ignitionEndTime) { enemy.isIgnited = false; }
+                    else {
+                        // Smoke from ignited enemies — throttled, capped, simple circles
+                        if (smokeParticles.length < 50 && !enemy._lastSmoke || now - enemy._lastSmoke > 300) {
+                            smokeParticles.push({
+                                x: enemy.x + (Math.random() - 0.5) * enemy.size,
+                                y: enemy.y - enemy.size * 0.3,
+                                dx: (Math.random() - 0.5) * 0.4, dy: -0.5 - Math.random() * 0.5,
+                                size: 6 + Math.random() * 4, alpha: 0.5
+                            });
+                            enemy._lastSmoke = now;
+                        }
+                        if (now - enemy.lastIgnitionDamageTime > 3000) {
+                            enemy.health -= 1;
+                            createBloodSplatter(enemy.x, enemy.y);
+                            if (enemy.health <= 0) { handleEnemyDeath(enemy); }
+                            enemy.lastIgnitionDamageTime = now;
+                        }
                     }
                 }
 
@@ -380,25 +468,31 @@ for (let i = merchants.length - 1; i >= 0; i--) {
                 if(cheats.fastEnemies) effectiveEnemySpeed *= 1.5;
                 if(cheats.slowEnemies) effectiveEnemySpeed *= 0.5;
 
-                enemy.isSlowedByPuddle = false;
-                for (const puddle of playerPuddles) {
-                    const dx = enemy.x - puddle.x;
-                    const dy = enemy.y - puddle.y;
-                    if (dx*dx + dy*dy < ((enemy.size / 2) + (puddle.size / 2))**2) {
-                        effectiveEnemySpeed *= PLAYER_PUDDLE_SLOW_FACTOR;
-                        enemy.isSlowedByPuddle = true;
-                        break;
+                // Throttle puddle checks — only every 3 frames per enemy (staggered by index)
+                const enemyIdx = enemies.indexOf(enemy);
+                enemy.isSlowedByPuddle = enemy.isSlowedByPuddle || false;
+                if ((update._frame + enemyIdx) % 3 === 0) {
+                    enemy.isSlowedByPuddle = false;
+                    for (const puddle of playerPuddles) {
+                        const dx = enemy.x - puddle.x;
+                        const dy = enemy.y - puddle.y;
+                        if (dx*dx + dy*dy < ((enemy.size / 2) + (puddle.size / 2))**2) {
+                            enemy.isSlowedByPuddle = true;
+                            break;
+                        }
+                    }
+                    if (!enemy.isSlowedByPuddle) {
+                        for (const puddle of snailPuddles) {
+                            const dx = enemy.x - puddle.x;
+                            const dy = enemy.y - puddle.y;
+                            if (dx*dx + dy*dy < ((enemy.size / 2) + (puddle.size / 2))**2) {
+                                enemy.isSlowedByPuddle = true;
+                                break;
+                            }
+                        }
                     }
                 }
-                 for (const puddle of snailPuddles) {
-                    const dx = enemy.x - puddle.x;
-                    const dy = enemy.y - puddle.y;
-                    if (dx*dx + dy*dy < ((enemy.size / 2) + (puddle.size / 2))**2) {
-                        effectiveEnemySpeed *= PLAYER_PUDDLE_SLOW_FACTOR;
-                        enemy.isSlowedByPuddle = true;
-                        break;
-                    }
-                }
+                if (enemy.isSlowedByPuddle) effectiveEnemySpeed *= PLAYER_PUDDLE_SLOW_FACTOR;
                 if (enemy.isFrozen && now < enemy.freezeEndTime) {
                     enemyMovements.set(enemy, {moveX: 0, moveY: 0});
                     return;
@@ -442,23 +536,29 @@ for (let i = merchants.length - 1; i >= 0; i--) {
                         else { if (now - enemy.lastEyeProjectileTime > EYE_PROJECTILE_INTERVAL) { eyeProjectiles.push({ x: enemy.x, y: enemy.y, size: EYE_PROJECTILE_SIZE, emoji: EYE_PROJECTILE_EMOJI, speed: EYE_PROJECTILE_SPEED, dx: Math.cos(angleToTarget) * EYE_PROJECTILE_SPEED, dy: Math.sin(angleToTarget) * EYE_PROJECTILE_SPEED, lifetime: now + EYE_PROJECTILE_LIFETIME }); enemy.lastEyeProjectileTime = now; playSound('playerShoot'); } }
                         break;
                     case 'vampire':
-                        let dodgeVectorX = 0, dodgeVectorY = 0;
-                        for (const weapon of weaponPool) {
-                            if(weapon.active) {
-                                const distSq = (enemy.x - weapon.x)**2 + (enemy.y - weapon.y)**2;
-                                if (distSq < VAMPIRE_DODGE_DETECTION_RADIUS * VAMPIRE_DODGE_DETECTION_RADIUS) {
-                                    if ((weapon.dx * (enemy.x - weapon.x)) + (weapon.dy * (enemy.y - weapon.y)) > 0) {
-                                        const perpDx = -weapon.dy, perpDy = weapon.dx;
-                                        const normalizeFactor = Math.sqrt(perpDx * perpDx + perpDy * perpDy);
-                                        if (normalizeFactor > 0) { dodgeVectorX += (perpDx / normalizeFactor); dodgeVectorY += (perpDy / normalizeFactor); }
+                        // Throttle dodge detection to every 4 frames
+                        if (!enemy._dodgeVX) { enemy._dodgeVX = 0; enemy._dodgeVY = 0; }
+                        if ((update._frame + enemies.indexOf(enemy)) % 4 === 0) {
+                            let dodgeVectorX = 0, dodgeVectorY = 0;
+                            for (const weapon of weaponPool) {
+                                if(weapon.active) {
+                                    const distSq = (enemy.x - weapon.x)**2 + (enemy.y - weapon.y)**2;
+                                    if (distSq < VAMPIRE_DODGE_DETECTION_RADIUS * VAMPIRE_DODGE_DETECTION_RADIUS) {
+                                        if ((weapon.dx * (enemy.x - weapon.x)) + (weapon.dy * (enemy.y - weapon.y)) > 0) {
+                                            const perpDx = -weapon.dy, perpDy = weapon.dx;
+                                            const normalizeFactor = Math.sqrt(perpDx * perpDx + perpDy * perpDy);
+                                            if (normalizeFactor > 0) { dodgeVectorX += (perpDx / normalizeFactor); dodgeVectorY += (perpDy / normalizeFactor); }
+                                        }
                                     }
                                 }
                             }
+                            const dodgeMagnitude = Math.sqrt(dodgeVectorX * dodgeVectorX + dodgeVectorY * dodgeVectorY);
+                            if (dodgeMagnitude > 0) { dodgeVectorX = (dodgeVectorX / dodgeMagnitude) * VAMPIRE_DODGE_STRENGTH; dodgeVectorY = (dodgeVectorY / dodgeMagnitude) * VAMPIRE_DODGE_STRENGTH; }
+                            enemy._dodgeVX = dodgeVectorX;
+                            enemy._dodgeVY = dodgeVectorY;
                         }
-                        const dodgeMagnitude = Math.sqrt(dodgeVectorX * dodgeVectorX + dodgeVectorY * dodgeVectorY);
-                        if (dodgeMagnitude > 0) { dodgeVectorX = (dodgeVectorX / dodgeMagnitude) * VAMPIRE_DODGE_STRENGTH; dodgeVectorY = (dodgeVectorY / dodgeMagnitude) * VAMPIRE_DODGE_STRENGTH; }
-                        moveX += (Math.cos(angleToTarget) * effectiveEnemySpeed) + dodgeVectorX;
-                        moveY += (Math.sin(angleToTarget) * effectiveEnemySpeed) + dodgeVectorY;
+                        moveX += (Math.cos(angleToTarget) * effectiveEnemySpeed) + enemy._dodgeVX;
+                        moveY += (Math.sin(angleToTarget) * effectiveEnemySpeed) + enemy._dodgeVY;
                         break;
                     case 'mosquito':
                         if (!enemy.currentMosquitoDirection || (now - enemy.lastDirectionUpdateTime > MOSQUITO_DIRECTION_UPDATE_INTERVAL)) { enemy.lastDirectionUpdateTime = now; enemy.currentMosquitoDirection = { dx: Math.cos(angleToTarget), dy: Math.sin(angleToTarget) }; }
@@ -538,6 +638,23 @@ for (let i = merchants.length - 1; i >= 0; i--) {
                 const dy_player = player.y - enemy.y;
 
                 if (canGhostDamage && !player.isInvincible && !cheats.god_mode && (dx_player*dx_player + dy_player*dy_player) < combinedRadius*combinedRadius) {
+                    // Shield aura: block one hit every 10s
+                    if (cheats.shield_aura) {
+                        const now2 = Date.now();
+                        if (!player._shieldLastHitTime || now2 - player._shieldLastHitTime > 10000) {
+                            player._shieldLastHitTime = now2;
+                            floatingTexts.push({ text: "Shield!", x: player.x, y: player.y - player.size, startTime: now2, duration: 1000, color: '#00FFFF' });
+                            handleEnemyDeath(enemy);
+                            return;
+                        }
+                    }
+                    // Nuke touch: wipe all enemies when hit
+                    if (cheats.nuke_touch) {
+                        for (let ni = enemies.length - 1; ni >= 0; ni--) {
+                            handleEnemyDeath(enemies[ni]);
+                        }
+                        return;
+                    }
                     player.lives--;
                     runStats.lastDamageTime = now;
                     if (typeof runStats.damageTakenThisRun !== 'number' || !Number.isFinite(runStats.damageTakenThisRun)) runStats.damageTakenThisRun = 0;
@@ -575,6 +692,31 @@ for (let i = merchants.length - 1; i >= 0; i--) {
                 }
             });
             
+            // Clone army cheat: update and fire from each clone
+            if (cheats.clone_army && window.cloneArmy && window.cloneArmy.length > 0) {
+                window.cloneArmy.forEach(clone => {
+                    let closestEnemy = null; let minDistanceSq = Infinity;
+                    enemies.forEach(enemy => {
+                        if (!enemy.isHit) {
+                            const distSq = (clone.x - enemy.x)**2 + (clone.y - enemy.y)**2;
+                            if (distSq < minDistanceSq) { minDistanceSq = distSq; closestEnemy = enemy; }
+                        }
+                    });
+                    if (closestEnemy) {
+                        clone.rotationAngle = Math.atan2(closestEnemy.y - clone.y, closestEnemy.x - clone.x);
+                        if (now - clone.lastFireTime > 600) {
+                            createWeapon(clone, clone.rotationAngle);
+                            clone.lastFireTime = now;
+                        }
+                    }
+                    // Slowly orbit player
+                    const idx = window.cloneArmy.indexOf(clone);
+                    const angle = (idx / window.cloneArmy.length) * Math.PI * 2 + now * 0.0005;
+                    clone.x += (player.x + Math.cos(angle) * 80 - clone.x) * 0.05;
+                    clone.y += (player.y + Math.sin(angle) * 80 - clone.y) * 0.05;
+                });
+            }
+
             if (doppelganger) {
                 if (now > doppelganger.endTime) {
                     doppelganger = null; doppelgangerActive = false;
@@ -599,7 +741,8 @@ for (let i = merchants.length - 1; i >= 0; i--) {
             }
 
             if (dogCompanionActive && !isTimeStopped) {
-                const DOG_SPEED = baseEnemySpeed * SKULL_SPEED_MULTIPLIER;
+                // Dog moves at 2x player speed
+                const DOG_SPEED = player.speed * 2;
                 if (dog.state === 'returning') {
                     const dx = player.x - dog.x;
                     const dy = player.y - dog.y;
@@ -612,14 +755,19 @@ for (let i = merchants.length - 1; i >= 0; i--) {
                 } else if (dog.state === 'seeking') {
                     if (dog.target && dog.target.isHit) { dog.target = null; }
                     if (!dog.target) {
-                        let closestEnemy = null; let minDistanceSq = Infinity;
-                        enemies.forEach(enemy => {
-                            if (!enemy.isHit && !enemy.isBoss) {
-                                const distSq = (dog.x - enemy.x)**2 + (dog.y - enemy.y)**2;
-                                if (distSq < minDistanceSq) { minDistanceSq = distSq; closestEnemy = enemy; }
+                        // Throttle target search to every 200ms instead of every frame
+                        if (!dog._lastTargetSearch || now - dog._lastTargetSearch > 200) {
+                            let closestEnemy = null; let minDistanceSq = Infinity;
+                            for (let di = 0; di < enemies.length; di++) {
+                                const enemy = enemies[di];
+                                if (!enemy.isHit && !enemy.isBoss) {
+                                    const distSq = (dog.x - enemy.x)**2 + (dog.y - enemy.y)**2;
+                                    if (distSq < minDistanceSq) { minDistanceSq = distSq; closestEnemy = enemy; }
+                                }
                             }
-                        });
-                        dog.target = closestEnemy;
+                            dog.target = closestEnemy;
+                            dog._lastTargetSearch = now;
+                        }
                     }
                     if (dog.target) {
                         const dx = dog.target.x - dog.x;
@@ -772,9 +920,11 @@ if(fireRateBoostActive) currentFireInterval /= 2;
 if(cheats.fastShooting) currentFireInterval /= 5;
 if(cheats.double_game_speed) currentFireInterval /= 2;
 currentFireInterval = Math.max(50, currentFireInterval);
-if (!cheats.no_gun_mode && (aimDx !== 0 || aimDy !== 0) && (now - lastWeaponFireTime > currentFireInterval)) {
-    createWeapon();
-    lastWeaponFireTime = now;
+if (!cheats.no_gun_mode && !player._isLumberjack && !player._isKnight && (aimDx !== 0 || aimDy !== 0) && (now - lastWeaponFireTime > currentFireInterval)) {
+    if (!cheats.click_to_fire) {
+        createWeapon();
+        lastWeaponFireTime = now;
+    }
 }
 
             for(const weapon of weaponPool) {
@@ -810,9 +960,13 @@ if (!cheats.no_gun_mode && (aimDx !== 0 || aimDy !== 0) && (now - lastWeaponFire
                     const dy = weapon.y - obs.y;
                     if (dx*dx + dy*dy < ((weapon.size / 2) + (obs.size / 2))**2) {
                         weapon.active = false;
-                        if(obs.health !== Infinity) obs.health--;
+                        obs.health--;
                         if (obs.health <= 0) {
-                            handleBarrelDestruction(obs);
+                            if (obs.emoji === '🛢️') {
+                                handleBarrelDestruction(obs);
+                            } else if (obs.emoji === '🧱') {
+                                handleBrickDestruction(obs);
+                            }
                             destructibles.splice(j, 1);
                         }
                         break; 
@@ -904,7 +1058,7 @@ if (!cheats.no_gun_mode && (aimDx !== 0 || aimDy !== 0) && (now - lastWeaponFire
                     enemy.ignitionEndTime = Date.now() + 6000;
                     enemy.lastIgnitionDamageTime = Date.now();
                 }
-                if (enemy.health <= 0) { handleEnemyDeath(enemy); }
+            if (enemy.health <= 0) { handleEnemyDeath(enemy); }
                 weapon.hitsLeft--;
                 if (weapon.hitsLeft > 0 && ricochetActive && !rocketLauncherActive) {
                     let newTarget = null; let minDistanceSq = Infinity;
@@ -1148,7 +1302,10 @@ for (let i = lightningBolts.length - 1; i >= 0; i--) {
                 if (now - p.spawnTime > p.lifetime) { bloodSplatters.splice(i, 1); continue; }
                 p.x += p.dx; p.y += p.dy; p.dx *= 0.96; p.dy *= 0.96; 
             }
+            // Cap blood arrays to avoid unbounded memory growth
+            if (bloodSplatters.length > 120) bloodSplatters.splice(0, bloodSplatters.length - 120);
             for (let i = bloodPuddles.length - 1; i >= 0; i--) { if (now - bloodPuddles[i].spawnTime > bloodPuddles[i].lifetime) { bloodPuddles.splice(i, 1); } }
+            if (bloodPuddles.length > 60) bloodPuddles.splice(0, bloodPuddles.length - 60);
 
             dogHomingShots.forEach(shot => {
                 if (shot.isHoming && enemies.length > 0) {
@@ -1251,11 +1408,12 @@ for (let i = lightningBolts.length - 1; i >= 0; i--) {
                 const p = smokeParticles[i];
                 p.x += p.dx;
                 p.y += p.dy;
-                p.alpha -= 0.02;
+                p.alpha -= 0.03; // fade faster
                 if (p.alpha <= 0) {
                     smokeParticles.splice(i, 1);
                 }
             }
+            if (smokeParticles.length > 30) smokeParticles.splice(0, smokeParticles.length - 30);
 
 
             antiGravityPulses = antiGravityPulses.filter(p => now - p.spawnTime < p.duration);

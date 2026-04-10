@@ -8,6 +8,13 @@ function gameLoop() {
   if (!gameOver && gameActive) animationFrameId = requestAnimationFrame(gameLoop);
 }
 
+// Separate lightweight loop that keeps gamepad working on menus too
+function menuGamepadLoop() {
+  if (!gameActive || gamePaused) handleGamepadInput();
+  requestAnimationFrame(menuGamepadLoop);
+}
+requestAnimationFrame(menuGamepadLoop);
+
 let playerData = {};
 const PERMANENT_UPGRADES = {
   playerDamage: { name: "Weapon Power", desc: "Permanently increase base damage by 2%.", baseCost: 100, costIncrease: 1.2, effect: 0.02, maxLevel: 10, icon: '💥' },
@@ -59,6 +66,11 @@ function showCharacterSelectScreen() {
       if (ACHIEVEMENTS[character.unlockCondition.id] && ACHIEVEMENTS[character.unlockCondition.id].unlocked) {
         isUnlocked = true;
       }
+    } else if (character.unlockCondition.type === 'store') {
+      // Unlocked by purchasing in the upgrades shop
+      if (playerData && playerData.unlockedPickups && playerData.unlockedPickups[character.id]) {
+        isUnlocked = true;
+      }
     }
 
     const tile = document.createElement('div');
@@ -66,10 +78,16 @@ function showCharacterSelectScreen() {
     if (!isUnlocked) tile.classList.add('locked');
     if (equippedCharacterID === character.id) tile.classList.add('selected');
 
+    const lockHint = character.unlockCondition.type === 'store'
+      ? `Buy in Upgrades shop`
+      : character.unlockCondition.type === 'achievement'
+        ? `Unlock "${ACHIEVEMENTS[character.unlockCondition.id]?.name || ''}" trophy`
+        : 'LOCKED';
+
     tile.innerHTML = `
       <p class="char-emoji">${character.emoji}</p>
       <h4 class="char-name">${character.name}</h4>
-      <p class="char-perk">${isUnlocked ? character.perk : 'LOCKED'}</p>
+      <p class="char-perk">${isUnlocked ? character.perk : lockHint}</p>
     `;
 
     if (isUnlocked) {

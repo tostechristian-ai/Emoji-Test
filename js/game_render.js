@@ -4,6 +4,16 @@
         function draw() {
             if (!gameActive) return;
             const now = Date.now();
+
+            // Viewport bounds for culling — add a margin so things don't pop in at edges
+            const CULL_MARGIN = 80;
+            const viewLeft   = cameraOffsetX - CULL_MARGIN;
+            const viewTop    = cameraOffsetY - CULL_MARGIN;
+            const viewRight  = cameraOffsetX + canvas.width  + CULL_MARGIN;
+            const viewBottom = cameraOffsetY + canvas.height + CULL_MARGIN;
+            const inView = (x, y, r) =>
+                x + r > viewLeft && x - r < viewRight &&
+                y + r > viewTop  && y - r < viewBottom;
             let currentHitShakeX = 0, currentHitShakeY = 0;
             if (isPlayerHitShaking) {
                 const elapsedTime = now - playerHitShakeStartTime;
@@ -22,6 +32,12 @@
             ctx.translate(canvas.width / 2, canvas.height / 2);
             ctx.scale(cameraZoom, cameraZoom);
             ctx.translate(-canvas.width / 2, -canvas.height / 2);
+            
+            // Mirror mode: flip entire canvas horizontally
+            if (cheats.mirror_mode) {
+                ctx.translate(canvas.width, 0);
+                ctx.scale(-1, 1);
+            }
             
             ctx.save();
             ctx.translate(-finalCameraOffsetX, -finalCameraOffsetY);
@@ -45,32 +61,45 @@
                 const age = now - area.startTime;
                 const lifeRatio = age / (area.endTime - area.startTime);
                 const alpha = 1 - lifeRatio;
+                if (!inView(area.x, area.y, area.radius)) return;
+                // Throttle flame position recalc to every 120ms — avoids per-frame Math.random
+                if (!area._flameCache || now - area._flameCacheTime > 120) {
+                    area._flameCache = [];
+                    for (let i = 0; i < 3; i++) {
+                        const angle = (i / 3) * Math.PI * 2 + (now / 500);
+                        const dist  = (0.3 + Math.random() * 0.5) * area.radius;
+                        area._flameCache.push({
+                            x: area.x + Math.cos(angle) * dist,
+                            y: area.y + Math.sin(angle) * dist,
+                            size: 10 + Math.random() * 4
+                        });
+                    }
+                    area._flameCacheTime = now;
+                }
                 ctx.save();
                 ctx.globalAlpha = alpha * 0.4;
-                ctx.fillStyle = '#1a1a1a'; // Black puddle
+                ctx.fillStyle = '#1a1a1a';
                 ctx.beginPath();
                 ctx.arc(area.x, area.y, area.radius, 0, Math.PI * 2);
                 ctx.fill();
                 ctx.globalAlpha = alpha * 0.7;
-                const flameCount = 2;
-                for (let i = 0; i < flameCount; i++) {
-                    const angle = (i / flameCount) * Math.PI * 2 + (now / 500);
-                    const dist = Math.random() * area.radius * 0.8;
-                    const flameX = area.x + Math.cos(angle) * dist;
-                    const flameY = area.y + Math.sin(angle) * dist;
-                    const flameSize = 10 + Math.random() * 5;
-                    ctx.font = `${flameSize}px sans-serif`;
-                    ctx.fillText('🔥', flameX, flameY);
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                // Set font once for all flames in this area
+                ctx.font = `${area._flameCache[0]?.size || 12}px sans-serif`;
+                for (const f of area._flameCache) {
+                    ctx.fillText('🔥', f.x, f.y);
                 }
                 ctx.restore();
             });
 
             bloodSplatters.forEach(p => {
+                if (!inView(p.x, p.y, p.size)) return;
                 const age = now - p.spawnTime;
                 const alpha = 1 - (age / p.lifetime);
                 ctx.save();
                 ctx.globalAlpha = Math.max(0, alpha);
-                ctx.fillStyle = 'red';
+                ctx.fillStyle = p.isWhite ? '#ffffff' : 'red';
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
                 ctx.fill();
@@ -115,6 +144,7 @@
             }
             
             bloodPuddles.forEach(puddle => {
+                if (!inView(puddle.x, puddle.y, puddle.initialSize)) return;
                 const age = now - puddle.spawnTime;
                 if (age < puddle.lifetime) {
                     const lifeRatio = age / puddle.lifetime;
@@ -176,18 +206,18 @@
             });
             
             smokeParticles.forEach(p => {
-    ctx.save();
-    // This is the correct way to apply the particle's alpha
-    ctx.globalAlpha = p.alpha;
-    
-    // Draw the smoke particle
-    ctx.font = `${p.size}px sans-serif`;
-    ctx.fillText('💨', p.x, p.y);
-    
-    ctx.restore();
-});
+                if (!inView(p.x, p.y, p.size)) return;
+                ctx.save();
+                ctx.globalAlpha = p.alpha;
+                ctx.font = `${p.size}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('💨', p.x, p.y);
+                ctx.restore();
+            });
 
             enemies.forEach(enemy => {
+                if (!inView(enemy.x, enemy.y, enemy.size)) return;
                 ctx.save();
                 if (enemy.emoji === '👻') {
                     ctx.globalAlpha = enemy.isVisible ? 1.0 : 0.2;
@@ -202,9 +232,6 @@
                 }
 
                 if (enemy.isIgnited) {
-                    if (Math.random() < 0.1) {
-                        smokeParticles.push({ x: enemy.x + (Math.random() - 0.5) * enemy.size, y: enemy.y, dx: (Math.random() - 0.5) * 0.5, dy: -Math.random() * 1, size: 10 + Math.random() * 5, alpha: 0.7 });
-                    }
                     ctx.globalAlpha = Math.min(ctx.globalAlpha, 0.8);
                     ctx.font = `${enemy.size * 0.8}px sans-serif`;
                     ctx.fillText('🔥', enemy.x, enemy.y + (enemy.bobOffset || 0));
@@ -250,11 +277,61 @@
                 if(!weapon.active) continue;
                 ctx.save();
                 ctx.translate(weapon.x, weapon.y);
+                // Skull: spinning bones instead of bullets
+                if (player._isSkull) {
+                    weapon._boneSpin = ((weapon._boneSpin || weapon.angle) + 0.25);
+                    ctx.rotate(weapon._boneSpin);
+                    const bonePre = preRenderedEntities && preRenderedEntities['🦴'];
+                    if (bonePre) {
+                        ctx.drawImage(bonePre, -10, -10, 20, 20);
+                    } else {
+                        ctx.font = '16px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                        ctx.fillText('🦴', 0, 0);
+                    }
+                    ctx.restore();
+                    continue;
+                }
+                // Lumberjack: spinning axes instead of bullets
+                if (player._isLumberjack) {
+                    weapon._axeSpin = ((weapon._axeSpin || weapon.angle) + 0.3);
+                    ctx.rotate(weapon._axeSpin);
+                    const axePre = preRenderedEntities && preRenderedEntities['🪓'];
+                    if (axePre) {
+                        ctx.drawImage(axePre, -11, -11, 22, 22);
+                    } else {
+                        ctx.font = '18px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                        ctx.fillText('🪓', 0, 0);
+                    }
+                    ctx.restore();
+                    continue;
+                }
                 ctx.rotate(weapon.angle);
-                if (flamingBulletsActive) ctx.filter = 'hue-rotate(30deg) saturate(5) brightness(1.5)';
-                else if (magneticProjectileActive && iceProjectileActive) ctx.filter = 'hue-rotate(270deg) saturate(2)';
-                else if (magneticProjectileActive) ctx.filter = 'hue-rotate(0deg) saturate(5) brightness(1.5)';
-                else if (iceProjectileActive) ctx.filter = 'hue-rotate(180deg) saturate(2)';
+                ctx.shadowBlur = 8;
+                if (cheats.rainbow_bullets) {
+                    const hue = (Date.now() / 5 + weapon.x + weapon.y) % 360;
+                    ctx.shadowColor = `hsl(${hue},100%,70%)`;
+                    ctx.filter = `hue-rotate(${hue}deg) saturate(3) brightness(2)`;
+                } else if (fireRateBoostActive) {
+                    ctx.shadowColor = '#ff3333';
+                    ctx.filter = 'hue-rotate(330deg) saturate(6) brightness(2.2)';
+                } else if (flamingBulletsActive) {
+                    ctx.shadowColor = '#ff8800';
+                    ctx.filter = 'hue-rotate(30deg) saturate(5) brightness(2)';
+                } else if (magneticProjectileActive && iceProjectileActive) {
+                    ctx.shadowColor = '#aa44ff';
+                    ctx.filter = 'hue-rotate(270deg) saturate(2) brightness(2)';
+                } else if (magneticProjectileActive) {
+                    ctx.shadowColor = '#ff6600';
+                    ctx.filter = 'brightness(2) saturate(5)';
+                } else if (iceProjectileActive) {
+                    ctx.shadowColor = '#44aaff';
+                    ctx.filter = 'hue-rotate(180deg) saturate(2) brightness(2)';
+                } else {
+                    const pulse = 0.7 + Math.sin(now / 120) * 0.3;
+                    ctx.shadowColor = '#ffffff';
+                    ctx.shadowBlur = 8 + pulse * 6;
+                    ctx.filter = `brightness(${2 + pulse * 0.5}) drop-shadow(0px 0px 3px #fff)`;
+                }
                 ctx.drawImage(sprites.bullet, -weapon.size / 2, -weapon.size / 2, weapon.size, weapon.size * 0.5);
                 ctx.restore();
             }
@@ -302,16 +379,32 @@
             };
 
             pickupItems.forEach(item => {
+                if (!inView(item.x, item.y, item.size)) return;
                 drawGlimmer(item);
                 if (item.type === 'box') { 
                     ctx.drawImage(sprites.pickupBox, item.x - item.size / 2, item.y - item.size / 2, item.size, item.size); 
                 } else {
                     const preRendered = preRenderedEntities[item.type];
-                    if(preRendered) ctx.drawImage(preRendered, item.x - preRendered.width/2, item.y - preRendered.height/2);
+                    if (preRendered) {
+                        // XP gems — larger + blue glow so they stand out
+                        const isXp = item.type !== '📦';
+                        const scale = isXp ? 1.5 : 1;
+                        const w = preRendered.width * scale;
+                        const h = preRendered.height * scale;
+                        ctx.save();
+                        if (isXp) {
+                            ctx.filter = 'hue-rotate(200deg) brightness(2) saturate(3) drop-shadow(0px 0px 5px #44aaff)';
+                            ctx.shadowColor = '#44aaff';
+                            ctx.shadowBlur = 8;
+                        }
+                        ctx.drawImage(preRendered, item.x - w / 2, item.y - h / 2, w, h);
+                        ctx.restore();
+                    }
                 }
             });
             
-            appleItems.forEach(item => { 
+            appleItems.forEach(item => {
+                if (!inView(item.x, item.y, item.size)) return;
                 drawGlimmer(item);
                 const preRendered = preRenderedEntities[APPLE_ITEM_EMOJI];
                 if(preRendered) ctx.drawImage(preRendered, item.x - preRendered.width/2, item.y - preRendered.height/2);
@@ -337,7 +430,7 @@
             const STEP_LENGTH = 10; const stepOffset = Math.sin(player.stepPhase) * STEP_LENGTH;
             
             const isSpinning = player.spinStartTime && now < player.spinStartTime + spinDuration;
-            if(!player.isDashing && !isSpinning){
+            if(!player.isDashing && !isSpinning && !player._isKnight){
                 ctx.save();
                 ctx.translate(player.x, player.y + bobOffset);
                 ctx.rotate(player.rotationAngle - Math.PI / 2);
@@ -363,7 +456,28 @@
                 const rotation = spinProgress * 2.1 * Math.PI * player.spinDirection;
                 ctx.rotate(rotation);
             }
-            ctx.drawImage(playerSprite, -player.size / 2, -player.size / 2, player.size, player.size);
+            // Custom character sprites override the cowboy sprite
+            if (player._isSkull) {
+                const skullPre = preRenderedEntities && preRenderedEntities['💀'];
+                if (skullPre) ctx.drawImage(skullPre, -player.size / 2, -player.size / 2, player.size, player.size);
+                else { ctx.font = `${player.size}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('💀', 0, 0); }
+            } else if (player._isLumberjack) {
+                const ljPre = preRenderedEntities && preRenderedEntities['🧑‍🚒'];
+                if (ljPre) ctx.drawImage(ljPre, -player.size / 2, -player.size / 2, player.size, player.size);
+                else { ctx.font = `${player.size}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('🧑‍🚒', 0, 0); }
+            } else if (player._isKnight) {
+                // 🤺 naturally faces right — mirror it so default is left-facing
+                // Only show un-mirrored when explicitly facing right
+                if (player.facing === 'right') {
+                    ctx.scale(-1, 1); // un-mirror = faces right
+                }
+                // Default (no scale) = faces left
+                const knPre = preRenderedEntities && preRenderedEntities['🤺'];
+                if (knPre) ctx.drawImage(knPre, -player.size / 2, -player.size / 2, player.size, player.size);
+                else { ctx.font = `${player.size}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('🤺', 0, 0); }
+            } else {
+                ctx.drawImage(playerSprite, -player.size / 2, -player.size / 2, player.size, player.size);
+            }
             ctx.restore();
 
 
@@ -391,7 +505,7 @@
             }
 
 
-            if (aimDx !== 0 || aimDy !== 0 || autoAimActive) {
+            if ((aimDx !== 0 || aimDy !== 0 || autoAimActive) && !player._isLumberjack && !player._isKnight) {
                 const aimAngle = player.rotationAngle;
                 ctx.save();
                 ctx.translate(player.x, player.y + bobOffset);
@@ -401,24 +515,52 @@
                 const gunHeight = gunWidth * (sprites.gun.height / sprites.gun.width);
                 const gunXOffset = player.size / 4;
                 const gunYOffset = -gunHeight / 2;
-                ctx.drawImage(sprites.gun, gunXOffset, gunYOffset, gunWidth, gunHeight);
-                if (dualGunActive) { ctx.save(); ctx.scale(-1, 1); ctx.drawImage(sprites.gun, -gunXOffset, gunYOffset, gunWidth, gunHeight); ctx.restore(); }
-                if (laserPointerActive) {
-                    ctx.save(); ctx.beginPath();
-                    const startX = gunXOffset + gunWidth * 0.9; const startY = gunYOffset + gunHeight / 2;
-                    ctx.moveTo(startX, startY); 
-                    const isMobile = document.body.classList.contains('is-mobile');
-                    if (isMobile) { ctx.lineTo(1000, startY); } 
-                    else {
-                        const worldMouseX = mouseX / cameraZoom + finalCameraOffsetX; const worldMouseY = mouseY / cameraZoom + finalCameraOffsetY;
-                        const rotatedMouseX = (worldMouseX - (player.x)) * Math.cos(-aimAngle) - (worldMouseY - (player.y + bobOffset)) * Math.sin(-aimAngle);
-                        ctx.lineTo(rotatedMouseX, startY);
+                if (player._isSkull) {
+                    // Skull: bone in place of gun
+                    const bonePre = preRenderedEntities && preRenderedEntities['🦴'];
+                    if (bonePre) {
+                        ctx.drawImage(bonePre, gunXOffset, -gunWidth / 2, gunWidth, gunWidth);
+                    } else {
+                        ctx.font = `${gunWidth}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                        ctx.fillText('🦴', gunXOffset + gunWidth / 2, 0);
                     }
-                    ctx.strokeStyle = 'rgba(255, 0, 0, 0.4)'; ctx.lineWidth = 1; ctx.stroke();
-                    ctx.restore();
+                } else {
+                    ctx.drawImage(sprites.gun, gunXOffset, gunYOffset, gunWidth, gunHeight);
+                    if (dualGunActive) { ctx.save(); ctx.scale(-1, 1); ctx.drawImage(sprites.gun, -gunXOffset, gunYOffset, gunWidth, gunHeight); ctx.restore(); }
+                    if (laserPointerActive) {
+                        ctx.save(); ctx.beginPath();
+                        const startX = gunXOffset + gunWidth * 0.9; const startY = gunYOffset + gunHeight / 2;
+                        ctx.moveTo(startX, startY); 
+                        const isMobile = document.body.classList.contains('is-mobile');
+                        if (isMobile) { ctx.lineTo(1000, startY); } 
+                        else {
+                            const worldMouseX = mouseX / cameraZoom + finalCameraOffsetX; const worldMouseY = mouseY / cameraZoom + finalCameraOffsetY;
+                            const rotatedMouseX = (worldMouseX - (player.x)) * Math.cos(-aimAngle) - (worldMouseY - (player.y + bobOffset)) * Math.sin(-aimAngle);
+                            ctx.lineTo(rotatedMouseX, startY);
+                        }
+                        ctx.strokeStyle = 'rgba(255, 0, 0, 0.4)'; ctx.lineWidth = 1; ctx.stroke();
+                        ctx.restore();
+                    }
                 }
                 ctx.restore();
             }
+
+            // Lumberjack: axe in hand when aiming
+            if (player._isLumberjack && (aimDx !== 0 || aimDy !== 0 || autoAimActive)) {
+                const aimAngle = player.rotationAngle;
+                const axePre = preRenderedEntities && preRenderedEntities['🪓'];
+                ctx.save();
+                ctx.translate(player.x, player.y + bobOffset);
+                ctx.rotate(aimAngle);
+                if (aimAngle > Math.PI / 2 || aimAngle < -Math.PI / 2) ctx.scale(1, -1);
+                const axeW = player.size * 0.9;
+                if (axePre) ctx.drawImage(axePre, player.size / 4, -axeW / 2, axeW, axeW);
+                else { ctx.font = `${axeW}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('🪓', player.size / 2, 0); }
+                ctx.restore();
+            }
+
+            // Knight: no weapon sprite shown — sword is handled by the auto-sword swing animation
+            // (the silver bar that appears during swings is sufficient visual feedback)
             
             if (doppelganger) {
                 ctx.save();
@@ -430,6 +572,16 @@
                 if (doppelganger.rotationAngle > Math.PI / 2 || doppelganger.rotationAngle < -Math.PI / 2) { ctx.scale(1, -1); }
                 ctx.drawImage(sprites.gun, gunXOffset, gunYOffset, gunWidth, gunHeight);
                 ctx.restore();
+            }
+
+            // Clone army cheat rendering
+            if (cheats.clone_army && window.cloneArmy) {
+                window.cloneArmy.forEach(clone => {
+                    ctx.save();
+                    ctx.globalAlpha = 0.7; ctx.filter = 'hue-rotate(90deg)';
+                    ctx.drawImage(playerSprite, clone.x - clone.size / 2, clone.y - clone.size / 2, clone.size, clone.size);
+                    ctx.restore();
+                });
             }
 
             if (orbitingPowerUpActive && sprites.spinninglight) {
@@ -578,9 +730,34 @@
                 ctx.restore();
             }
 
+            // Night mode: dark overlay
+            if (cheats.night_mode) {
+                ctx.save();
+                ctx.fillStyle = 'rgba(0, 0, 30, 0.72)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                // Small light circle around player screen position
+                const psx = player.x - cameraOffsetX;
+                const psy = player.y - cameraOffsetY;
+                const grad = ctx.createRadialGradient(psx, psy, 0, psx, psy, 180);
+                grad.addColorStop(0, 'rgba(0,0,0,0)');
+                grad.addColorStop(1, 'rgba(0,0,30,0.72)');
+                ctx.globalCompositeOperation = 'destination-out';
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.arc(psx, psy, 180, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalCompositeOperation = 'source-over';
+                ctx.restore();
+            }
+
             if (isMouseInCanvas && gameActive && sprites.crosshair) {
-                const reticleSize = 16;
+                const reticleSize = 22;
+                ctx.save();
+                ctx.shadowColor = '#00ffff';
+                ctx.shadowBlur = 10;
+                ctx.filter = 'brightness(3) saturate(0) invert(1) drop-shadow(0 0 3px #00ffff)';
                 ctx.drawImage(sprites.crosshair, mouseX - reticleSize / 2, mouseY - reticleSize / 2, reticleSize, reticleSize);
+                ctx.restore();
             }
         }
 
